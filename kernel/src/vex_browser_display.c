@@ -1,0 +1,361 @@
+#include <unos/vex_legacy_compat.h>
+
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+#include <unos/debug_log.h>
+#include <unos/gui.h>
+#include <unos/heap.h>
+#include <unos/scheduler.h>
+
+static ladybird_display_surface_t display_surface;
+static uint8_t display_ready;
+static uint8_t display_present_pending;
+static uint8_t display_present_dirty_valid;
+static uint32_t display_present_dirty_x;
+static uint32_t display_present_dirty_y;
+static uint32_t display_present_dirty_w;
+static uint32_t display_present_dirty_h;
+
+#define BROWSER_COMMAND_QUEUE_SIZE 8u
+#define BROWSER_COMMAND_MAX 160u
+#define BROWSER_RESULT_MAX 8u
+#define BROWSER_RESULT_TITLE_MAX 96u
+#define BROWSER_RESULT_URL_MAX 256u
+#define BROWSER_RESULT_SNIPPET_MAX 192u
+
+static char browser_command_queue[BROWSER_COMMAND_QUEUE_SIZE][BROWSER_COMMAND_MAX];
+static uint8_t browser_command_head;
+static uint8_t browser_command_tail;
+static uint32_t browser_process_pid;
+static char browser_results_query[BROWSER_COMMAND_MAX];
+static char browser_result_titles[BROWSER_RESULT_MAX][BROWSER_RESULT_TITLE_MAX];
+static char browser_result_urls[BROWSER_RESULT_MAX][BROWSER_RESULT_URL_MAX];
+static char browser_result_snippets[BROWSER_RESULT_MAX][BROWSER_RESULT_SNIPPET_MAX];
+static uint32_t browser_result_count;
+static uint8_t browser_results_are_visible;
+
+static void browser_runtime_reset(void) {
+    browser_process_pid = 0u;
+    browser_command_head = 0u;
+    browser_command_tail = 0u;
+    browser_results_query[0] = '\0';
+    browser_result_count = 0u;
+    browser_results_are_visible = 0u;
+    for (uint32_t i = 0u; i < BROWSER_RESULT_MAX; ++i) {
+        browser_result_titles[i][0] = '\0';
+        browser_result_urls[i][0] = '\0';
+        browser_result_snippets[i][0] = '\0';
+    }
+}
+
+static void copy_string_limited(char *dst, size_t capacity, const char *src) {
+    size_t i = 0u;
+    if (dst == NULL || capacity == 0u) {
+        return;
+    }
+    if (src == NULL) {
+        dst[0] = '\0';
+        return;
+    }
+    while (src[i] != '\0' && i + 1u < capacity) {
+        dst[i] = src[i];
+        ++i;
+    }
+    dst[i] = '\0';
+}
+
+void ladybird_debug_log(const char *text) {
+    if (text == NULL) {
+        return;
+    }
+    debug_log_puts(text);
+}
+
+static void debug_log_u32(uint32_t value) {
+    char digits[11];
+    size_t count = 0u;
+    if (value == 0u) {
+        debug_log_puts("0");
+        return;
+    }
+    while (value != 0u && count < sizeof(digits)) {
+        digits[count++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+    while (count > 0u) {
+        char out[2];
+        out[0] = digits[--count];
+        out[1] = '\0';
+        debug_log_puts(out);
+    }
+}
+
+static void display_reset_surface(void) {
+    if (display_surface.pixels != NULL) {
+        kfree(display_surface.pixels);
+    }
+
+    memset(&display_surface, 0, sizeof(display_surface));
+    display_ready = 0;
+    display_present_pending = 0;
+    display_present_dirty_valid = 0;
+    display_present_dirty_x = 0u;
+    display_present_dirty_y = 0u;
+    display_present_dirty_w = 0u;
+    display_present_dirty_h = 0u;
+    browser_runtime_reset();
+}
+
+static void draw_scaled_surface(void) {
+    uint64_t screen_w;
+    uint64_t screen_h;
+    uint64_t target_w;
+    uint64_t target_h;
+    uint64_t origin_x;
+    uint64_t origin_y;
+
+    if (browser_results_are_visible || !display_ready || display_surface.pixels == NULL || display_surface.width == 0u || display_surface.height == 0u) {
+        return;
+    }
+
+    const uint64_t client_x = gui_content_x();
+    const uint64_t client_y = gui_content_y();
+    screen_w = gui_content_width();
+    screen_h = gui_content_height();
+    if (screen_w == 0u || screen_h == 0u) {
+        return;
+    }
+
+    target_w = screen_w;
+    target_h = screen_h;
+    origin_x = client_x;
+    origin_y = client_y;
+
+    if (display_present_dirty_valid) {
+        gui_blit_argb_scaled_partial(
+            origin_x,
+            origin_y,
+            target_w,
+            target_h,
+            display_surface.pixels,
+            display_surface.width,
+            display_surface.height,
+            display_surface.stride,
+            display_present_dirty_x,
+            display_present_dirty_y,
+            display_present_dirty_w,
+            display_present_dirty_h
+        );
+    } else {
+        gui_blit_argb_scaled(origin_x, origin_y, target_w, target_h, display_surface.pixels, display_surface.width, display_surface.height, display_surface.stride);
+    }
+}
+
+int ladybird_display_open(uint32_t width, uint32_t height) {
+    size_t pixels_count;
+
+    display_reset_surface();
+    if (width == 0u || height == 0u) {
+        return -1;
+    }
+
+    pixels_count = (size_t)width * (size_t)height;
+    display_surface.pixels = kmalloc(pixels_count * sizeof(uint32_t));
+    if (display_surface.pixels == NULL) {
+        return -1;
+    }
+
+    memset(display_surface.pixels, 0, pixels_count * sizeof(uint32_t));
+    display_surface.width = width;
+    display_surface.height = height;
+    display_surface.stride = width;
+    display_ready = 1;
+    browser_process_pid = scheduler_current_pid();
+    ladybird_debug_log("LB display_open pid=");
+    debug_log_u32(browser_process_pid);
+    ladybird_debug_log("\n");
+    gui_browser_begin();
+    return 0;
+}
+
+void ladybird_display_resize(uint32_t width, uint32_t height) {
+    if (display_surface.width == width && display_surface.height == height) {
+        return;
+    }
+
+    (void)ladybird_display_open(width, height);
+}
+
+ladybird_display_surface_t *ladybird_display_surface(void) {
+    return display_ready ? &display_surface : NULL;
+}
+
+void ladybird_display_present(void) {
+    ladybird_debug_log("LB present: pending\n");
+    display_present_pending = 1u;
+}
+
+void ladybird_display_refresh(void) {
+    ladybird_debug_log("LB refresh: pending\n");
+    display_present_pending = 1u;
+}
+
+void ladybird_display_close(void) {
+    gui_browser_end();
+    display_reset_surface();
+}
+
+void ladybird_display_set_pending_dirty(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    display_present_dirty_x = x;
+    display_present_dirty_y = y;
+    display_present_dirty_w = w;
+    display_present_dirty_h = h;
+    display_present_dirty_valid = (w != 0u && h != 0u) ? 1u : 0u;
+}
+
+void ladybird_display_clear_pending_dirty(void) {
+    display_present_dirty_valid = 0u;
+    display_present_dirty_x = 0u;
+    display_present_dirty_y = 0u;
+    display_present_dirty_w = 0u;
+    display_present_dirty_h = 0u;
+}
+
+void ladybird_display_pump(void) {
+    if (display_present_pending == 0u) {
+        return;
+    }
+    ladybird_debug_log("GUI pump: begin\n");
+    if (display_present_dirty_valid) {
+        ladybird_debug_log("GUI pump: partial dirty\n");
+    }
+    display_present_pending = 0u;
+    draw_scaled_surface();
+    gui_browser_frame_ready();
+    display_present_dirty_valid = 0u;
+    ladybird_debug_log("GUI pump: end\n");
+}
+
+void ladybird_browser_yield_to_process(void) {
+    if (browser_process_pid == 0u) {
+        return;
+    }
+    ladybird_debug_log("GUI yield_to: begin\n");
+    process_yield_to(browser_process_pid);
+    ladybird_debug_log("GUI yield_to: resumed\n");
+}
+
+uint32_t ladybird_browser_process_pid(void) {
+    return browser_process_pid;
+}
+
+int ladybird_browser_command_push(const char *command) {
+    const uint8_t next = (uint8_t)((browser_command_head + 1u) % BROWSER_COMMAND_QUEUE_SIZE);
+    size_t i = 0u;
+
+    if (command == NULL || command[0] == '\0') {
+        ladybird_debug_log("Q push: empty\n");
+        return -1;
+    }
+    if (next == browser_command_tail) {
+        browser_command_tail = (uint8_t)((browser_command_tail + 1u) % BROWSER_COMMAND_QUEUE_SIZE);
+    }
+
+    while (command[i] != '\0' && i + 1u < BROWSER_COMMAND_MAX) {
+        browser_command_queue[browser_command_head][i] = command[i];
+        ++i;
+    }
+    browser_command_queue[browser_command_head][i] = '\0';
+    browser_command_head = next;
+    ladybird_debug_log("Q push: ok\n");
+    if (browser_process_pid != 0u) {
+        ladybird_debug_log("Q push: target pid=");
+        debug_log_u32(browser_process_pid);
+        ladybird_debug_log(" state=");
+        ladybird_debug_log(scheduler_state_name(browser_process_pid));
+        ladybird_debug_log("\n");
+        scheduler_set_process_priority(browser_process_pid, 3u);
+        process_wake(browser_process_pid);
+        ladybird_debug_log("Q push: after wake state=");
+        ladybird_debug_log(scheduler_state_name(browser_process_pid));
+        ladybird_debug_log("\n");
+        ladybird_debug_log("Q push: wake\n");
+    }
+    return 0;
+}
+
+int ladybird_browser_command_pop(char *buffer, size_t size) {
+    size_t i = 0u;
+
+    if (buffer == NULL || size == 0u) {
+        return -1;
+    }
+    if (browser_command_tail == browser_command_head) {
+        buffer[0] = '\0';
+        return 0;
+    }
+
+    while (browser_command_queue[browser_command_tail][i] != '\0' && i + 1u < size) {
+        buffer[i] = browser_command_queue[browser_command_tail][i];
+        ++i;
+    }
+    buffer[i] = '\0';
+    browser_command_tail = (uint8_t)((browser_command_tail + 1u) % BROWSER_COMMAND_QUEUE_SIZE);
+    scheduler_set_process_priority(scheduler_current_pid(), 1u);
+    ladybird_debug_log("Q pop: ok\n");
+    return 1;
+}
+
+void ladybird_browser_results_begin(const char *query) {
+    browser_result_count = 0u;
+    browser_results_are_visible = 0u;
+    copy_string_limited(browser_results_query, sizeof(browser_results_query), query);
+    for (uint32_t i = 0u; i < BROWSER_RESULT_MAX; ++i) {
+        browser_result_titles[i][0] = '\0';
+        browser_result_urls[i][0] = '\0';
+        browser_result_snippets[i][0] = '\0';
+    }
+}
+
+void ladybird_browser_results_add(const char *title, const char *url, const char *snippet) {
+    if (browser_result_count >= BROWSER_RESULT_MAX || url == NULL || url[0] == '\0') {
+        return;
+    }
+    copy_string_limited(browser_result_titles[browser_result_count], BROWSER_RESULT_TITLE_MAX, title);
+    copy_string_limited(browser_result_urls[browser_result_count], BROWSER_RESULT_URL_MAX, url);
+    copy_string_limited(browser_result_snippets[browser_result_count], BROWSER_RESULT_SNIPPET_MAX, snippet);
+    ++browser_result_count;
+}
+
+void ladybird_browser_results_show(void) {
+    browser_results_are_visible = 1u;
+}
+
+void ladybird_browser_results_hide(void) {
+    browser_results_are_visible = 0u;
+}
+
+uint8_t ladybird_browser_results_visible(void) {
+    return browser_results_are_visible;
+}
+
+uint32_t ladybird_browser_results_count(void) {
+    return browser_result_count;
+}
+
+const char *ladybird_browser_results_query(void) {
+    return browser_results_query;
+}
+
+const char *ladybird_browser_result_title(uint32_t index) {
+    return index < browser_result_count ? browser_result_titles[index] : "";
+}
+
+const char *ladybird_browser_result_url(uint32_t index) {
+    return index < browser_result_count ? browser_result_urls[index] : "";
+}
+
+const char *ladybird_browser_result_snippet(uint32_t index) {
+    return index < browser_result_count ? browser_result_snippets[index] : "";
+}
