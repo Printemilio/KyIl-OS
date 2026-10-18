@@ -112,7 +112,7 @@ static void draw_glyph(
 }
 
 void framebuffer_draw_wordmark(struct limine_framebuffer *framebuffer) {
-    static const char text[] = "Vex-OS";
+    static const char text[] = "KyIlOS";
     const size_t scale = 8u;
     const size_t glyph_width = 5u * scale;
     const size_t glyph_height = 7u * scale;

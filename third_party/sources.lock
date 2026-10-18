@@ -1,0 +1,12 @@
+# Pinned upstream sources. Fetched by scripts/fetch-third-party.sh into
+# build/third_party/, extracted pristine, then patched from
+# third_party/patches/<name>/ in lexical order.
+#
+# name      version   sha256                                                            url
+musl      1.2.5     a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4  https://musl.libc.org/releases/musl-1.2.5.tar.gz
+ocaml     5.4.0     6fcf1b192e389e54c4f5cb51306ab2baee2a54a25b1770366de5a8b42695996e  https://github.com/ocaml/ocaml/releases/download/5.4.0/ocaml-5.4.0.tar.gz
+dash      0.5.12    6a474ac46e8b0b32916c4c60df694c82058d3297d8b385b74508030ca4a8f28a  http://gondor.apana.org.au/~herbert/dash/files/dash-0.5.12.tar.gz
+binutils  2.42      f6e4d41fd5fc778b06b7891457b3620da5ecea1006c6a4a41ae998109f85a800  https://ftp.gnu.org/gnu/binutils/binutils-2.42.tar.xz
+raylib-ocaml 2.2.1  f3bd8a1a7a6b3c979e42b4ad3094123071b4df950f22a1d00f5d5a54b60d0f24  https://github.com/tjammer/raylib-ocaml/releases/download/2.2.1/raylib-2.2.1.tbz
+ctypes    0.24.0    249c5604c8554659761a7282db4ad200aa8c0fdc408cdb53102bd70feeb51955  https://github.com/yallop/ocaml-ctypes/archive/refs/tags/0.24.0.tar.gz
+integers  0.8.0     04a1a6d5cc1ecfd3f354a83caed27e59995bb26adec64d88193ccc36268929fa  https://github.com/yallop/ocaml-integers/archive/0.8.0.tar.gz

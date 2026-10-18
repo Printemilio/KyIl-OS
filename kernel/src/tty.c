@@ -1,13 +1,19 @@
 #include <unos/tty.h>
+#include <unos/console.h>
 
 #include <limine.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <unos/boot_requests.h>
 #include <unos/gui.h>
+#include "vex_font_inter.h"
 
-#define FONT_WIDTH 8ull
-#define FONT_HEIGHT 8ull
+#define FONT_BITMAP_WIDTH 8ull
+#define FONT_BITMAP_HEIGHT 8ull
+#define FONT_WIDTH 13ull
+#define FONT_HEIGHT ((uint64_t)INTER13_CELL_H)
+#define TTY_LVGL_CELL_CAPACITY 16384u
+#define TTY_LVGL_TEXT_CAPACITY (TTY_LVGL_CELL_CAPACITY + 256u)
 
 static const uint8_t font[128][8] = {
     [' '] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
@@ -118,7 +124,40 @@ static uint64_t region_width;
 static uint64_t region_height;
 static uint32_t foreground;
 static uint32_t background;
+static uint8_t foreground_r;
+static uint8_t foreground_g;
+static uint8_t foreground_b;
+static uint8_t background_r;
+static uint8_t background_g;
+static uint8_t background_b;
 static uint8_t stream_output_enabled = 1u;
+static uint8_t bitmap_render_enabled = 1u;
+static char tty_cells[TTY_LVGL_CELL_CAPACITY];
+static char tty_lvgl_text_buffer[TTY_LVGL_TEXT_CAPACITY];
+static uint64_t tty_cell_columns;
+static uint64_t tty_cell_rows;
+
+static void tty_cells_clear(void) {
+    const uint64_t count = tty_cell_columns * tty_cell_rows;
+    for (uint64_t i = 0u; i < count && i < TTY_LVGL_CELL_CAPACITY; ++i) {
+        tty_cells[i] = ' ';
+    }
+}
+
+static void tty_cells_scroll(void) {
+    if (tty_cell_rows == 0u || tty_cell_columns == 0u) {
+        return;
+    }
+    for (uint64_t row = 1u; row < tty_cell_rows; ++row) {
+        for (uint64_t col = 0u; col < tty_cell_columns; ++col) {
+            tty_cells[(row - 1u) * tty_cell_columns + col] =
+                tty_cells[row * tty_cell_columns + col];
+        }
+    }
+    for (uint64_t col = 0u; col < tty_cell_columns; ++col) {
+        tty_cells[(tty_cell_rows - 1u) * tty_cell_columns + col] = ' ';
+    }
+}
 
 static uint32_t scale_channel(uint8_t value, uint8_t mask_size) {
     if (mask_size == 0) {
@@ -133,6 +172,17 @@ static uint32_t pack_color(uint8_t r, uint8_t g, uint8_t b) {
     return (scale_channel(r, tty_framebuffer->red_mask_size) << tty_framebuffer->red_mask_shift)
          | (scale_channel(g, tty_framebuffer->green_mask_size) << tty_framebuffer->green_mask_shift)
          | (scale_channel(b, tty_framebuffer->blue_mask_size) << tty_framebuffer->blue_mask_shift);
+}
+
+static uint8_t blend_channel(uint8_t fg, uint8_t bg, uint8_t alpha) {
+    return (uint8_t)(((uint32_t)fg * (uint32_t)alpha + (uint32_t)bg * (uint32_t)(255u - alpha)) / 255u);
+}
+
+static uint32_t blend_text_color(uint8_t alpha) {
+    return pack_color(
+        blend_channel(foreground_r, background_r, alpha),
+        blend_channel(foreground_g, background_g, alpha),
+        blend_channel(foreground_b, background_b, alpha));
 }
 
 static void put_pixel(uint64_t x, uint64_t y, uint32_t color) {
@@ -150,39 +200,77 @@ static void put_pixel(uint64_t x, uint64_t y, uint32_t color) {
 }
 
 static void draw_cell(uint64_t cell_x, uint64_t cell_y, char c) {
-    const uint8_t *glyph = font[(uint8_t)c < 128 ? (uint8_t)c : (uint8_t)'?'];
+    if (!bitmap_render_enabled) {
+        return;
+    }
+    const uint8_t ch = (uint8_t)c;
+    const uint8_t glyph_index = (ch >= 32u && ch < 127u) ? (uint8_t)(ch - 32u) : 0u;
+    const uint8_t glyph_width = inter13_widths[glyph_index];
+    const uint8_t *glyph = inter13_data + inter13_offsets[glyph_index];
     const uint64_t px = region_x + cell_x * FONT_WIDTH;
     const uint64_t py = region_y + cell_y * FONT_HEIGHT;
+    const uint64_t glyph_x = px + (FONT_WIDTH > glyph_width ? (FONT_WIDTH - glyph_width) / 2u : 0u);
 
     for (uint64_t y = 0; y < FONT_HEIGHT; ++y) {
         for (uint64_t x = 0; x < FONT_WIDTH; ++x) {
-            const uint32_t color = (glyph[y] & (uint8_t)(0x80u >> x)) != 0 ? foreground : background;
-            put_pixel(px + x, py + y, color);
+            put_pixel(px + x, py + y, background);
+        }
+    }
+
+    for (uint64_t gy = 0; gy < FONT_HEIGHT; ++gy) {
+        for (uint64_t gx = 0; gx < glyph_width; ++gx) {
+            const uint8_t alpha = glyph[gy * glyph_width + gx];
+            if (alpha != 0u) {
+                put_pixel(glyph_x + gx, py + gy, blend_text_color(alpha));
+            }
         }
     }
 }
 
 static void draw_glyph_clipped(uint64_t x, uint64_t y, char c, uint32_t fg, uint32_t bg, uint8_t transparent, uint64_t clip_x0, uint64_t clip_y0, uint64_t clip_x1, uint64_t clip_y1) {
-    const uint8_t *glyph = font[(uint8_t)c < 128 ? (uint8_t)c : (uint8_t)'?'];
+    const uint8_t ch = (uint8_t)c;
+    const uint8_t glyph_index = (ch >= 32u && ch < 127u) ? (uint8_t)(ch - 32u) : 0u;
+    const uint8_t glyph_width = inter13_widths[glyph_index];
+    const uint8_t *glyph = inter13_data + inter13_offsets[glyph_index];
+    const uint64_t glyph_x = x + (FONT_WIDTH > glyph_width ? (FONT_WIDTH - glyph_width) / 2u : 0u);
+
+    if (!transparent) {
+        for (uint64_t cy = 0; cy < FONT_HEIGHT; ++cy) {
+            const uint64_t py = y + cy;
+            if (py < clip_y0 || py >= clip_y1) {
+                continue;
+            }
+            for (uint64_t cx = 0; cx < FONT_WIDTH; ++cx) {
+                const uint64_t px = x + cx;
+                if (px >= clip_x0 && px < clip_x1) {
+                    put_pixel(px, py, bg);
+                }
+            }
+        }
+    }
 
     for (uint64_t gy = 0; gy < FONT_HEIGHT; ++gy) {
         const uint64_t py = y + gy;
         if (py < clip_y0 || py >= clip_y1) {
             continue;
         }
+        for (uint64_t gx = 0; gx < glyph_width; ++gx) {
+            const uint64_t px = glyph_x + gx;
+            const uint8_t alpha = glyph[gy * glyph_width + gx];
+            uint32_t color;
 
-        for (uint64_t gx = 0; gx < FONT_WIDTH; ++gx) {
-            const uint64_t px = x + gx;
-            const uint8_t bit_on = (glyph[gy] & (uint8_t)(0x80u >> gx)) != 0u;
-
-            if (px < clip_x0 || px >= clip_x1) {
+            if (alpha == 0u || px < clip_x0 || px >= clip_x1) {
                 continue;
             }
-            if (transparent && !bit_on) {
-                continue;
+            if (alpha == 255u || transparent) {
+                color = fg;
+            } else {
+                const uint8_t r = blend_channel(foreground_r, background_r, alpha);
+                const uint8_t g = blend_channel(foreground_g, background_g, alpha);
+                const uint8_t b = blend_channel(foreground_b, background_b, alpha);
+                color = pack_color(r, g, b);
             }
-
-            put_pixel(px, py, bit_on ? fg : bg);
+            put_pixel(px, py, color);
         }
     }
 }
@@ -193,6 +281,13 @@ static void scroll(void) {
     }
 
     uint8_t *fb = tty_framebuffer->address;
+
+    tty_cells_scroll();
+
+    if (!bitmap_render_enabled) {
+        gui_terminal_snapshot_refresh();
+        return;
+    }
 
     for (uint64_t y = 0; y < (rows - 1u) * FONT_HEIGHT; ++y) {
         uint8_t *dst = fb + (region_y + y) * tty_framebuffer->pitch + region_x * (tty_framebuffer->bpp / 8u);
@@ -210,6 +305,7 @@ static void scroll(void) {
     }
 
     gui_sync_rect_from_framebuffer(region_x, region_y, region_width, region_height);
+    gui_terminal_snapshot_refresh();
 }
 
 static void newline(void) {
@@ -236,12 +332,13 @@ void tty_init(void) {
     rows = region_height / FONT_HEIGHT;
     cursor_x = 0;
     cursor_y = 0;
-    foreground = pack_color(238, 242, 247);
-    background = pack_color(9, 11, 16);
+    tty_set_colors_rgb(255, 255, 255, 20, 20, 20);
     tty_clear();
 }
 
 void tty_putchar(char c) {
+    GUI_GUARD;
+    console_emit(c);
     if (tty_framebuffer == NULL || columns == 0 || rows == 0) {
         return;
     }
@@ -263,19 +360,39 @@ void tty_putchar(char c) {
         if (cursor_x > 0) {
             --cursor_x;
             draw_cell(cursor_x, cursor_y, ' ');
+            if (cursor_y < tty_cell_rows && cursor_x < tty_cell_columns) {
+                tty_cells[cursor_y * tty_cell_columns + cursor_x] = ' ';
+            }
+            gui_terminal_snapshot_refresh_rect(
+                region_x + cursor_x * FONT_WIDTH,
+                region_y + cursor_y * FONT_HEIGHT,
+                FONT_WIDTH,
+                FONT_HEIGHT);
         }
         return;
     }
 
+    const uint64_t cell_x = cursor_x;
+    const uint64_t cell_y = cursor_y;
     draw_cell(cursor_x, cursor_y, c);
+    if (cursor_y < tty_cell_rows && cursor_x < tty_cell_columns) {
+        tty_cells[cursor_y * tty_cell_columns + cursor_x] = c;
+    }
+    gui_terminal_snapshot_refresh_rect(
+        region_x + cell_x * FONT_WIDTH,
+        region_y + cell_y * FONT_HEIGHT,
+        FONT_WIDTH,
+        FONT_HEIGHT);
     ++cursor_x;
 
     if (cursor_x >= columns) {
         newline();
     }
+
 }
 
 void tty_puts(const char *str) {
+    GUI_GUARD;
     if (str == NULL) {
         return;
     }
@@ -286,6 +403,8 @@ void tty_puts(const char *str) {
 }
 
 void tty_clear(void) {
+    GUI_GUARD;
+    console_clear();
     if (tty_framebuffer == NULL) {
         return;
     }
@@ -293,18 +412,31 @@ void tty_clear(void) {
         return;
     }
 
-    for (uint64_t y = region_y; y < region_y + region_height && y < tty_framebuffer->height; ++y) {
-        for (uint64_t x = region_x; x < region_x + region_width && x < tty_framebuffer->width; ++x) {
-            put_pixel(x, y, background);
+    tty_cells_clear();
+
+    if (bitmap_render_enabled) {
+        for (uint64_t y = region_y; y < region_y + region_height && y < tty_framebuffer->height; ++y) {
+            for (uint64_t x = region_x; x < region_x + region_width && x < tty_framebuffer->width; ++x) {
+                put_pixel(x, y, background);
+            }
         }
     }
 
     cursor_x = 0;
     cursor_y = 0;
+    gui_terminal_snapshot_refresh();
 }
 
 void tty_set_region(unsigned long x, unsigned long y, unsigned long width, unsigned long height) {
+    GUI_GUARD;
     if (tty_framebuffer == NULL) {
+        return;
+    }
+
+    /* CONFIGURE is resent while the window is repainted.  A repeated region
+       is not a terminal reset: preserve the cell contents and live cursor. */
+    if (region_x == (uint64_t)x && region_y == (uint64_t)y &&
+        region_width == (uint64_t)width && region_height == (uint64_t)height) {
         return;
     }
 
@@ -316,18 +448,122 @@ void tty_set_region(unsigned long x, unsigned long y, unsigned long width, unsig
     rows = region_height / FONT_HEIGHT;
     cursor_x = 0;
     cursor_y = 0;
+    if (columns != 0u && rows != 0u && columns <= TTY_LVGL_CELL_CAPACITY / rows) {
+        tty_cell_columns = columns;
+        tty_cell_rows = rows;
+        tty_cells_clear();
+    } else {
+        tty_cell_columns = 0u;
+        tty_cell_rows = 0u;
+    }
+    if (!bitmap_render_enabled) {
+        gui_terminal_snapshot_refresh();
+    }
+}
+
+/* Boot-smoke probe for CONFIGURE messages repeated during scene redraw.  It is
+   intentionally restricted to the pre-GUI smoke path, before any TTY cell
+   grid has been published to a shell. */
+int tty_region_idempotence_self_test(void) {
+    if (tty_framebuffer == NULL || !bitmap_render_enabled ||
+        tty_cell_columns != 0u || tty_cell_rows != 0u ||
+        region_width <= FONT_WIDTH || region_height < FONT_HEIGHT) {
+        return -1;
+    }
+
+    const uint64_t saved_x = region_x;
+    const uint64_t saved_y = region_y;
+    const uint64_t saved_width = region_width;
+    const uint64_t saved_height = region_height;
+    const uint64_t saved_cursor_x = cursor_x;
+    const uint64_t saved_cursor_y = cursor_y;
+    const char saved_first_cell = tty_cells[0];
+    const uint64_t probe_width = saved_width - 1u;
+
+    tty_set_region((unsigned long)saved_x, (unsigned long)saved_y,
+                   (unsigned long)probe_width, (unsigned long)saved_height);
+    if (tty_cell_columns == 0u || tty_cell_rows == 0u ||
+        tty_cell_columns <= 1u || tty_cell_rows <= 1u) {
+        region_x = saved_x;
+        region_y = saved_y;
+        region_width = saved_width;
+        region_height = saved_height;
+        columns = saved_width / FONT_WIDTH;
+        rows = saved_height / FONT_HEIGHT;
+        tty_cell_columns = 0u;
+        tty_cell_rows = 0u;
+        cursor_x = saved_cursor_x;
+        cursor_y = saved_cursor_y;
+        tty_cells[0] = saved_first_cell;
+        return -1;
+    }
+
+    tty_cells[0] = 'X';
+    cursor_x = 1u;
+    cursor_y = 1u;
+    tty_set_region((unsigned long)saved_x, (unsigned long)saved_y,
+                   (unsigned long)probe_width, (unsigned long)saved_height);
+    const int preserved = tty_cells[0] == 'X' && cursor_x == 1u && cursor_y == 1u;
+
+    /* Restore the pre-GUI TTY state without invoking the reset path under
+       test.  The smoke boot has not yet established a logical cell grid. */
+    region_x = saved_x;
+    region_y = saved_y;
+    region_width = saved_width;
+    region_height = saved_height;
+    columns = saved_width / FONT_WIDTH;
+    rows = saved_height / FONT_HEIGHT;
+    tty_cell_columns = 0u;
+    tty_cell_rows = 0u;
+    cursor_x = saved_cursor_x;
+    cursor_y = saved_cursor_y;
+    tty_cells[0] = saved_first_cell;
+    return preserved ? 0 : -1;
 }
 
 void tty_set_stream_output_enabled(int enabled) {
+    GUI_GUARD;
     stream_output_enabled = enabled != 0 ? 1u : 0u;
 }
 
+void tty_set_bitmap_render_enabled(int enabled) {
+    GUI_GUARD;
+    bitmap_render_enabled = enabled != 0 ? 1u : 0u;
+}
+
+const char *tty_lvgl_text(void) {
+    uint64_t output = 0u;
+
+    for (uint64_t row = 0u; row < tty_cell_rows; ++row) {
+        uint64_t last = tty_cell_columns;
+        while (last > 0u && tty_cells[row * tty_cell_columns + last - 1u] == ' ') {
+            --last;
+        }
+        for (uint64_t col = 0u; col < last && output + 1u < TTY_LVGL_TEXT_CAPACITY; ++col) {
+            tty_lvgl_text_buffer[output++] = tty_cells[row * tty_cell_columns + col];
+        }
+        if (row + 1u < tty_cell_rows && output + 1u < TTY_LVGL_TEXT_CAPACITY) {
+            tty_lvgl_text_buffer[output++] = '\n';
+        }
+    }
+    tty_lvgl_text_buffer[output] = '\0';
+    return tty_lvgl_text_buffer;
+}
+
 void tty_set_colors_rgb(unsigned char fg_r, unsigned char fg_g, unsigned char fg_b, unsigned char bg_r, unsigned char bg_g, unsigned char bg_b) {
+    GUI_GUARD;
+    foreground_r = fg_r;
+    foreground_g = fg_g;
+    foreground_b = fg_b;
+    background_r = bg_r;
+    background_g = bg_g;
+    background_b = bg_b;
     foreground = pack_color(fg_r, fg_g, fg_b);
     background = pack_color(bg_r, bg_g, bg_b);
 }
 
 void tty_draw_text_at(unsigned long x, unsigned long y, const char *str, unsigned int fg, unsigned int bg) {
+    GUI_GUARD;
     tty_draw_text_clipped_at(x, y, (unsigned long)-1, str, fg, bg);
 }
 
@@ -397,6 +633,39 @@ void tty_draw_text_transparent_clipped_at(unsigned long x, unsigned long y, unsi
             }
 
             draw_glyph_clipped(px, y, str[i], fg, 0u, 1u, clip_x0, clip_y0, clip_x1, clip_y1);
+        }
+    }
+}
+
+/* Draw text with each 8x8 glyph pixel expanded to scale×scale blocks.
+ * Useful for large UI labels (e.g. scale=3 → 24px tall text). */
+void tty_draw_text_large_at(unsigned long x, unsigned long y, unsigned long scale,
+                             const char *str, unsigned int fg) {
+    unsigned long i;
+
+    if (tty_framebuffer == NULL || str == NULL || scale == 0u) {
+        return;
+    }
+
+    for (i = 0u; str[i] != '\0'; ++i) {
+        const uint8_t *glyph = font[(uint8_t)str[i] < 128u ? (uint8_t)str[i] : (uint8_t)'?'];
+        const uint64_t cx = (uint64_t)x + (uint64_t)i * FONT_BITMAP_WIDTH * (uint64_t)scale;
+        uint64_t gy;
+
+        for (gy = 0u; gy < FONT_BITMAP_HEIGHT; ++gy) {
+            uint64_t gx;
+            for (gx = 0u; gx < FONT_BITMAP_WIDTH; ++gx) {
+                if ((glyph[gy] & (uint8_t)(0x80u >> gx)) != 0u) {
+                    uint64_t sy;
+                    for (sy = 0u; sy < (uint64_t)scale; ++sy) {
+                        uint64_t sx;
+                        for (sx = 0u; sx < (uint64_t)scale; ++sx) {
+                            put_pixel(cx + gx * (uint64_t)scale + sx,
+                                      (uint64_t)y + gy * (uint64_t)scale + sy, fg);
+                        }
+                    }
+                }
+            }
         }
     }
 }

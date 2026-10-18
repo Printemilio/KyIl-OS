@@ -285,11 +285,52 @@ interrupt_common:
     push %r13
     push %r14
     push %r15
+
+    # Hardware interrupts do not perform the SYSCALL swapgs transition.  If
+    # the interrupted frame came from ring 3, switch to this CPU's kernel GS
+    # base before entering C code.  RAX is already saved above and is restored
+    # below, so it is safe to use for the CPL test.
+    xor %r12d, %r12d
+    mov 144(%rsp), %rax
+    test $3, %rax
+    jnz 9f
+    # NMI/MC/DB/DF may interrupt the tiny kernel-CPL SWAPGS entry/exit
+    # window. Those vectors have dedicated IST stacks. Determine GS from
+    # its actual base, never from RSP or an application pointer.
+    mov 120(%rsp), %rax
+    cmp $2,%rax
+    je 8f
+    cmp $1,%rax
+    je 8f
+    cmp $8,%rax
+    je 8f
+    cmp $18,%rax
+    jne 1f
+8:
+    mov $0xc0000101,%ecx
+    rdmsr
+    test %edx,%edx
+    js 1f
+9:
+    swapgs
+    lfence
+    mov $1,%r12d
+1:
     mov %rsp, %rdi
     cld
-    sub $8, %rsp
+    # Kernel interrupts can arrive at any instruction, hence at either stack
+    # alignment. Preserve the exact frame and establish SysV call alignment.
+    mov %rsp, %r13
+    and $-16, %rsp
     call interrupt_dispatch
-    add $8, %rsp
+    mov %r13, %rsp
+
+    # The saved invocation flag survives nested interrupts and context
+    # switches, including a paranoid entry in a kernel-CPL SWAPGS window.
+    test %r12d, %r12d
+    jz 2f
+    swapgs
+2:
     pop %r15
     pop %r14
     pop %r13

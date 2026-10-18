@@ -1,0 +1,21 @@
+#version 450
+layout(local_size_x=4) in;
+layout(set=0,binding=0) uniform usamplerBuffer sourceU;
+layout(set=0,binding=1) uniform isamplerBuffer sourceI;
+layout(set=0,binding=2) uniform samplerBuffer sourceF;
+layout(set=0,binding=3,r32ui) writeonly uniform uimageBuffer targetU;
+layout(set=0,binding=4,r32i) writeonly uniform iimageBuffer targetI;
+layout(set=0,binding=5,r32f) writeonly uniform imageBuffer targetF;
+layout(set=0,binding=6,std430) buffer Result { uint words[]; } result;
+void main() {
+    int i=int(gl_GlobalInvocationID.x);
+    uvec4 u=texelFetch(sourceU,i);
+    ivec4 s=texelFetch(sourceI,i);
+    vec4 f=texelFetch(sourceF,i);
+    imageStore(targetU,i,uvec4(u.x+7u));
+    imageStore(targetI,i,ivec4(s.x-3));
+    imageStore(targetF,i,vec4(f.x*2.0));
+    result.words[uint(i)*3u]=u.y+u.z+u.w;
+    result.words[uint(i)*3u+1u]=uint(s.y+s.z+s.w);
+    result.words[uint(i)*3u+2u]=floatBitsToUint(f.y+f.z+f.w);
+}

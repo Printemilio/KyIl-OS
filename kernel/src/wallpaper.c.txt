@@ -1,0 +1,38 @@
+#include <stdio.h>
+
+int main(void) {
+    puts(
+        "╔══════════════════════════════════════════════════════════════╗\n"
+        "║                  VEXOS WALLPAPER MEMORIAL                    ║\n"
+        "╠══════════════════════════════════════════════════════════════╣\n"
+        "║                                                              ║\n"
+        "║  Here once lived a single line of C measuring                ║\n"
+        "║                                                              ║\n"
+        "║                  7,287,348 characters                        ║\n"
+        "║                                                              ║\n"
+        "║  It existed because, long ago, VexOS could not load          ║\n"
+        "║  image files properly.                                       ║\n"
+        "║                                                              ║\n"
+        "║  So the wallpaper was encoded directly into the kernel       ║\n"
+        "║  as millions of comma-separated pixel values.                ║\n"
+        "║                                                              ║\n"
+        "║  It consumed megabytes, offended text editors, and           ║\n"
+        "║  somehow survived long enough to become archaeology.         ║\n"
+        "║                                                              ║\n"
+        "║  Source size: 7.29 MB                                        ║\n"
+        "║  Pixels:     746,496                                         ║\n"
+        "║  Raw RGB:    2,239,488 bytes                                 ║\n"
+        "║                                                              ║\n"
+        "║  Removed with honor.                                         ║\n"
+        "║                                                              ║\n"
+        "║               May no source line grow this large again.      ║\n"
+        "║                                                              ║\n"
+        "╚══════════════════════════════════════════════════════════════╝"
+    );
+
+    return 0;
+}
+
+int vex_wallpaper_memorial(void) {
+    return 7287348;
+}

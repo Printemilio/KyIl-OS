@@ -1,0 +1,55 @@
+// Ordering and equality. The evaluator and the generated code share one
+// definition of each, so what this really checks is that the compiler reaches
+// for the same one -- in particular that '<' on strings is not accidentally
+// numeric, and that equality across two different types is false rather than
+// an error.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun main() {
+  show("1 < 2 = ", 1 < 2);
+  show("2 < 2 = ", 2 < 2);
+  show("2 <= 2 = ", 2 <= 2);
+  show("3 > 2 = ", 3 > 2);
+  show("3 >= 4 = ", 3 >= 4);
+
+  show("1 < 1.5 = ", 1 < 1.5);
+  show("1.5 <= 1.5 = ", 1.5 <= 1.5);
+
+  show("\"apple\" < \"banana\" = ", "apple" < "banana");
+  show("\"b\" < \"a\" = ", "b" < "a");
+  show("\"abc\" <= \"abc\" = ", "abc" <= "abc");
+  show("\"Z\" < \"a\" = ", "Z" < "a");
+  show("\"\" < \"a\" = ", "" < "a");
+
+  show("1 == 1 = ", 1 == 1);
+  show("1 == 1.0 = ", 1 == 1.0);
+  show("1 == \"1\" = ", 1 == "1");
+  show("1 != 2 = ", 1 != 2);
+  show("true == true = ", true == true);
+  show("true == 1 = ", true == 1);
+  show("none == none = ", none == none);
+  show("none == 0 = ", none == 0);
+  show("none == false = ", none == false);
+  show("\"a\" == \"a\" = ", "a" == "a");
+
+  // A not-a-number compares false against everything, itself included, and
+  // that has to survive translation. 'nan' and 'inf' are literals, so this
+  // also checks they come back out of the generated OCaml as themselves.
+  show("nan = ", nan);
+  show("nan == nan = ", nan == nan);
+  show("nan != nan = ", nan != nan);
+  show("nan < 1.0 = ", nan < 1.0);
+  show("nan >= 1.0 = ", nan >= 1.0);
+  show("0.0 / 0.0 = ", 0.0 / 0.0);
+
+  show("inf = ", inf);
+  show("-inf = ", -inf);
+  show("1.0 / 0.0 = ", 1.0 / 0.0);
+  show("inf > 999999.0 = ", inf > 999999.0);
+  show("inf == inf = ", inf == inf);
+}
+
+main();

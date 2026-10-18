@@ -1,0 +1,32 @@
+// L'exemple du README, mot pour mot, rendu par le backend raylib.
+// Si celui-ci tourne, le chemin complet marche : parser, arbre, layout,
+// hit-testing, callback, mutation d'etat, set_text.
+
+counter = 0;
+
+Window("Counter", 360px, 240px) {
+  background: #1e1e1e;
+  layout: column;
+  padding: 24px;
+  spacing: 18px;
+  align: center;
+
+  Label { id: "display"; text: "Count: 0"; font-size: 28px; font-weight: bold; }
+
+  Button {
+    text: "Increment";
+    onClick: {
+      counter = counter + 1;
+      set_text(display, "Count: " @ counter);
+    };
+  }
+
+  Button {
+    text: "Remise a zero";
+    background: #475569;
+    onClick: {
+      counter = 0;
+      set_text(display, "Count: 0");
+    };
+  }
+}

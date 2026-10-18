@@ -1,0 +1,144 @@
+// Every drawing verb, exercised: circles, lines, rectangles, pixels and text,
+// each in its batched form.
+//
+// Bodies go round a centre, each leaving a trail behind it. Everything on screen
+// is four calls a frame -- one per kind of shape -- whatever the number of
+// bodies or the length of their trails. That is the whole point of the batched
+// forms: the loop over the shapes runs in the backend, not here.
+
+import draw;
+
+BODIES = 7;
+TRAIL = 90;
+
+angle = 0.0;
+trails = [];
+
+COLOURS = [16755370, 8968447, 9109960, 16766720, 16744319, 10079487, 16750848];
+
+fun build_trails() {
+  body = 0;
+  while (body < BODIES) {
+    // One flat list per body: x, y, x, y, ... oldest first.
+    push(trails, []);
+    body = body + 1;
+  }
+}
+
+fun advance() {
+  angle = angle + 0.02;
+  centre_x = 320.0;
+  centre_y = 250.0;
+  body = 0;
+  while (body < BODIES) {
+    // Each body a little further out and a little slower.
+    radius = 40.0 + body * 26.0;
+    speed = 1.0 + body * 0.35;
+    turn = angle * speed + body * 0.9;
+    x = centre_x + cos(turn) * radius;
+    y = centre_y + sin(turn) * radius * 0.55;
+    trail = trails[body];
+    push(trail, x);
+    push(trail, y);
+    // Keep the trail to a fixed length, oldest off the front.
+    while (len(trail) > TRAIL * 2) {
+      remove(trail, 0);
+      remove(trail, 0);
+    }
+    body = body + 1;
+  }
+}
+
+fun paint() {
+  draw.clear("#080b12");
+
+  // The trails, as one long list of line segments: two points and a thickness
+  // and colour per segment.
+  segments = [];
+  body = 0;
+  while (body < BODIES) {
+    trail = trails[body];
+    colour = COLOURS[body];
+    point = 0;
+    while (point + 3 < len(trail)) {
+      push(segments, trail[point]);
+      push(segments, trail[point + 1]);
+      push(segments, trail[point + 2]);
+      push(segments, trail[point + 3]);
+      push(segments, 1.5);
+      push(segments, colour);
+      point = point + 2;
+    }
+    body = body + 1;
+  }
+  draw.lines(segments);
+
+  // The bodies themselves.
+  discs = [];
+  body = 0;
+  while (body < BODIES) {
+    trail = trails[body];
+    last = len(trail);
+    if last >= 2 {
+      push(discs, trail[last - 2]);
+      push(discs, trail[last - 1]);
+      push(discs, 4.0 + body * 0.7);
+      push(discs, COLOURS[body]);
+    }
+    body = body + 1;
+  }
+  draw.circles(discs);
+
+  // A dotted ruler along the bottom, one pixel per step.
+  dots = [];
+  x = 10;
+  while (x < 630) {
+    push(dots, x);
+    push(dots, 470);
+    push(dots, 4473924);
+    x = x + 6;
+  }
+  draw.pixels(dots);
+
+  // A frame around the whole thing, as four thin rectangles.
+  draw.rects([0, 0, 640, 2, 2236962,
+              0, 478, 640, 2, 2236962,
+              0, 0, 2, 480, 2236962,
+              638, 0, 2, 480, 2236962]);
+
+  draw.text(14, 12, "circles, lines, rects, pixels, text", 16, "#7d8da5");
+  draw.text(14, 34, "bodies: " @ BODIES @ "   trail: " @ TRAIL, 14, "#4c5a72");
+  return round(len(segments) / 6);
+}
+
+build_trails();
+
+Window("Orbits", 680px, 560px) {
+  background: #080b12;
+  layout: column;
+  padding: 10px;
+  spacing: 6px;
+
+  Label {
+    id: "readout";
+    text: "drawing";
+    color: #7d8da5;
+    font-size: 13px;
+  }
+
+  Canvas {
+    id: "surface";
+    width: 640px;
+    height: 480px;
+    background: #080b12;
+    onDraw: {
+      drawn = paint();
+      set_text(readout, "segments: " @ drawn @ "   four calls a frame");
+    };
+  }
+
+  Timer {
+    interval: 16ms;
+    onTick: { advance(); };
+  }
+}

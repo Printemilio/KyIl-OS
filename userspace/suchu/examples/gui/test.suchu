@@ -1,0 +1,27 @@
+// The smallest styled window: one label, one button that rewrites it.
+
+Window("Test", 400px, 200px) {
+  background: #202020;
+  color: #eeeeee;
+  layout: column;
+  spacing: 10px;
+  padding: 20px;
+
+  Label {
+    id: "msg";
+    text: "Click the button";
+    font-size: 16px;
+    color: #ffffff;
+  }
+
+  Button {
+    text: "Click me";
+    width: 120px;
+    background: #444444;
+    color: #ffffff;
+    border-radius: 6px;
+    // `id: "msg"` above binds `msg` as a handle -- pass the handle itself,
+    // not the string "msg", or set_text has nothing to write into.
+    onClick: { set_text(msg, "Hello from Suchu!"); };
+  }
+}

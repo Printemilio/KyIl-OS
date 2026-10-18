@@ -1,0 +1,103 @@
+diff --git a/asmcomp/x86_proc.ml b/asmcomp/x86_proc.ml
+index 959559f..ff465fb 100644
+--- a/asmcomp/x86_proc.ml
++++ b/asmcomp/x86_proc.ml
+@@ -27,6 +27,7 @@ type system =
+   | S_freebsd
+   | S_netbsd
+   | S_openbsd
++  | S_vexos
+ 
+   | S_unknown
+ 
+@@ -43,6 +44,7 @@ let system = match Config.system with
+   | "freebsd" -> S_freebsd
+   | "netbsd" -> S_netbsd
+   | "openbsd" -> S_openbsd
++  | "vexos" -> S_vexos
+ 
+   | _ -> S_unknown
+ 
+diff --git a/asmcomp/x86_proc.mli b/asmcomp/x86_proc.mli
+index c7f9a5e..841a6f0 100644
+--- a/asmcomp/x86_proc.mli
++++ b/asmcomp/x86_proc.mli
+@@ -69,6 +69,7 @@ type system =
+   | S_freebsd
+   | S_netbsd
+   | S_openbsd
++  | S_vexos
+ 
+   | S_unknown
+ 
+diff --git a/build-aux/config.sub b/build-aux/config.sub
+index 4aaae46..c9bb994 100644
+--- a/build-aux/config.sub
++++ b/build-aux/config.sub
+@@ -2134,6 +2134,7 @@ case $os in
+ 	| unos* \
+ 	| uwin* \
+ 	| uxpv* \
++	| vexos* \
+ 	| v88r* \
+ 	|*vms* \
+ 	| vos* \
+diff --git a/configure b/configure
+index 8bb7306..098516e 100644
+--- a/configure
++++ b/configure
+@@ -18574,6 +18574,8 @@ case $target in #(
+     arch=arm; system=openbsd ;; #(
+   x86_64-*-linux*) :
+     has_native_backend=yes; arch=amd64; system=linux ;; #(
++  x86_64-*-vexos*) :
++    has_native_backend=yes; arch=amd64; system=vexos ;; #(
+   x86_64-*-dragonfly*) :
+     arch=amd64; system=dragonfly ;; #(
+   x86_64-*-solaris*) :
+diff --git a/configure.ac b/configure.ac
+index 0535f40..eda4957 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1574,6 +1574,8 @@ AS_CASE([$target],
+     [arch=arm; system=openbsd],
+   [x86_64-*-linux*],
+     [has_native_backend=yes; arch=amd64; system=linux],
++  [x86_64-*-vexos*],
++    [has_native_backend=yes; arch=amd64; system=vexos],
+   [x86_64-*-dragonfly*],
+     [arch=amd64; system=dragonfly],
+   [x86_64-*-solaris*],
+diff --git a/runtime/caml/platform.h b/runtime/caml/platform.h
+index a282f8b..f2e0278 100644
+--- a/runtime/caml/platform.h
++++ b/runtime/caml/platform.h
+@@ -151,7 +151,7 @@ void caml_plat_futex_free(caml_plat_futex*);
+ #ifndef CAML_PLAT_FUTEX_FALLBACK
+ #  if defined(_WIN32)                                   \
+   || (defined(__linux__) && defined(HAS_LINUX_FUTEX_H)) \
+-  || defined(__FreeBSD__) || defined(__OpenBSD__)
++  || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__vexos__)
+ /* TODO We have implementations for these platforms, but they are
+    currently untested, so use the fallback instead.
+   || defined(__NetBSD__) || defined(__DragonFly__) */
+diff --git a/runtime/platform.c b/runtime/platform.c
+index 0c780af..6afa5e5 100644
+--- a/runtime/platform.c
++++ b/runtime/platform.c
+@@ -243,6 +243,15 @@ void caml_plat_futex_free(caml_plat_futex* ftx) {
+           /* timeout */ NULL,                   \
+           /* ignored */ NULL, 0)
+ 
++#  elif defined(__vexos__)
++/* The native Vex futex (VEX_SYS_FUTEX), keyed by address space. */
++#    include <vex/futex.h>
++#    define CAML_PLAT_FUTEX_WAIT(ftx, undesired)            \
++  vex_futex_wait((volatile uint32_t *)(ftx), (undesired), \
++                 /* no timeout */ 0)
++#    define CAML_PLAT_FUTEX_WAKE(ftx)           \
++  vex_futex_wake((volatile uint32_t *)(ftx), INT_MAX)
++
+ #  elif 0 /* defined(__APPLE__)
+    macOS has [__ulock_(wait|wake)()] which is used in implementations
+    of libc++, (e.g. by LLVM) but the API is private and unstable.

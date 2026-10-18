@@ -1,0 +1,70 @@
+// if as a statement and if as an expression, nested, with the conditions being
+// values of every kind rather than booleans.
+
+fun classify(n) {
+  if (n < 0) {
+    return "negative";
+  } else if (n == 0) {
+    return "zero";
+  } else if (n < 10) {
+    return "small";
+  } else {
+    return "large";
+  }
+}
+
+fun sign_word(n) {
+  return if n > 0 then "up" else if n < 0 then "down" else "flat";
+}
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun main() {
+  show("classify(-5) = ", classify(-5));
+  show("classify(0) = ", classify(0));
+  show("classify(3) = ", classify(3));
+  show("classify(50) = ", classify(50));
+
+  show("sign_word(2) = ", sign_word(2));
+  show("sign_word(-2) = ", sign_word(-2));
+  show("sign_word(0) = ", sign_word(0));
+
+  // An if with no else, taken and not taken.
+  taken = "unset";
+  if (true) {
+    taken = "yes";
+  }
+  show("taken = ", taken);
+  if (false) {
+    taken = "no";
+  }
+  show("still = ", taken);
+
+  // Non-boolean conditions go through the same truthiness rule.
+  if (0) { print("0 is truthy"); } else { print("0 is falsy"); }
+  if ("") { print("empty is truthy"); } else { print("empty is falsy"); }
+  if (none) { print("none is truthy"); } else { print("none is falsy"); }
+  if ("a") { print("\"a\" is truthy"); } else { print("\"a\" is falsy"); }
+  if (0.0) { print("0.0 is truthy"); } else { print("0.0 is falsy"); }
+
+  // Nested, so the generated begin/end nesting gets exercised.
+  a = 1;
+  b = 2;
+  if (a == 1) {
+    if (b == 2) {
+      print("both");
+    } else {
+      print("only a");
+    }
+  } else {
+    print("neither");
+  }
+
+  // An if-expression inside an argument, where the two branches have
+  // different types.
+  show("mixed branches = ", if a == 1 then 10 else "ten");
+}
+
+main();

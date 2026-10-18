@@ -1,0 +1,69 @@
+// '&&' and '||' return one of their operands rather than a boolean, and they
+// must not evaluate the second one once the first has decided. Each test below
+// prints from inside the operand, so an eager translation shows up as an extra
+// line rather than as a wrong value.
+
+fun loud(label, value) {
+  print("  evaluated " @ label);
+  return value;
+}
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun three(a, b, c) {
+  return "" @ a @ b @ c;
+}
+
+fun main() {
+  print("false && ...");
+  show("  result = ", loud("left", false) && loud("right", true));
+
+  print("true && ...");
+  show("  result = ", loud("left", true) && loud("right", false));
+
+  print("true || ...");
+  show("  result = ", loud("left", true) || loud("right", false));
+
+  print("false || ...");
+  show("  result = ", loud("left", false) || loud("right", true));
+
+  // The value that comes back is the operand, not a coerced boolean.
+  show("0 || \"fallback\" = ", 0 || "fallback");
+  show("\"set\" || \"fallback\" = ", "set" || "fallback");
+  show("1 && 2 = ", 1 && 2);
+  show("none && 2 = ", none && 2);
+  show("\"\" || 5 = ", "" || 5);
+
+  // Truthiness of each kind of value, read through '!'.
+  show("!true = ", !true);
+  show("!false = ", !false);
+  show("!0 = ", !0);
+  show("!1 = ", !1);
+  show("!0.0 = ", !0.0);
+  show("!\"\" = ", !"");
+  show("!\"a\" = ", !"a");
+  show("!none = ", !none);
+  show("!!none = ", !!none);
+
+  // Operands are evaluated left to right, which OCaml does not promise for the
+  // arguments of a function -- so the generated code has to say so explicitly.
+  print("operands of '+':");
+  show("  sum = ", loud("left", 1) + loud("right", 2));
+  print("operands of '<':");
+  show("  less = ", loud("left", 1) < loud("right", 2));
+  print("operands of '==':");
+  show("  equal = ", loud("left", 1) == loud("right", 2));
+  print("operands of '@':");
+  show("  joined = ", loud("left", "a") @ loud("right", "b"));
+  print("nested calls:");
+  show("  nested = ", three(loud("x", "x"), loud("y", "y"), loud("z", "z")));
+
+  // Chained, to check the nesting is left-associative in both.
+  show("chain = ", false || false || 3);
+  show("chain = ", 1 && 2 && 3);
+  show("mixed = ", false || 1 && 2);
+}
+
+main();

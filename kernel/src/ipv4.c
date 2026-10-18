@@ -6,6 +6,7 @@
 #include <unos/dhcp.h>
 #include <unos/ethernet.h>
 #include <unos/tty.h>
+#include <unos/udp.h>
 
 #define IPV4_HEADER_MIN_SIZE 20u
 #define IPV4_VERSION 4u
@@ -98,12 +99,20 @@ static ipv4_handler_t find_handler(uint8_t protocol) {
     return NULL;
 }
 
-static void icmp_handle(uint32_t src_ip, const void *payload, size_t size) {
+static void icmp_handle(uint32_t src_ip,uint32_t dest_ip,const void *payload,size_t size) {
+    (void)dest_ip;
     if (size < sizeof(icmp_echo_header_t)) {
         return;
     }
 
     const icmp_echo_header_t *request = payload;
+    if(checksum16(payload,size)!=0)return;
+    if(request->type==3 || request->type==11 || request->type==12){
+        const uint8_t *p=payload;
+        uint32_t detail=request->type==3 && request->code==4?((uint32_t)p[6]<<8)|p[7]:0;
+        udp_transport_fault(src_ip,request->type,request->code,detail,p+8,size-8);
+        return;
+    }
     if (request->type != ICMP_TYPE_ECHO_REQUEST || request->code != 0) {
         return;
     }
@@ -159,7 +168,7 @@ static void ipv4_handle_ethernet(const uint8_t *src_mac, const void *payload, si
         return;
     }
 
-    handler(bswap32(header->src_ip), (const uint8_t *)payload + header_size, total_length - header_size);
+    handler(bswap32(header->src_ip),bswap32(header->dest_ip),(const uint8_t *)payload+header_size,total_length-header_size);
 }
 
 void ipv4_init(void) {
@@ -184,7 +193,7 @@ uint32_t ipv4_get_local_ip(void) {
     return local_ip;
 }
 
-int ipv4_send(uint32_t dest_ip, uint8_t protocol, const void *payload, size_t size) {
+static int ipv4_send_inner(uint32_t dest_ip, uint8_t protocol, const void *payload, size_t size) {
     if (payload == NULL || size + IPV4_HEADER_MIN_SIZE > IPV4_MAX_PACKET_SIZE) {
         return -1;
     }
@@ -255,4 +264,10 @@ void ipv4_register_handler(uint8_t protocol, ipv4_handler_t handler) {
             return;
         }
     }
+}
+
+int ipv4_send(uint32_t dest_ip, uint8_t protocol, const void *payload, size_t size) {
+    uint64_t flags;__asm__ volatile("pushfq; pop %0; cli":"=r"(flags)::"memory");
+    int result=ipv4_send_inner(dest_ip,protocol,payload,size);
+    __asm__ volatile("push %0; popfq"::"r"(flags):"memory","cc");return result;
 }

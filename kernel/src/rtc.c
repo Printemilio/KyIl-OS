@@ -1,6 +1,9 @@
 #include <unos/rtc.h>
 
 #include <stdint.h>
+#include <unos/kernel_guard.h>
+#include <unos/driver_manager.h>
+static kernel_gate_t rtc_gate=KERNEL_GATE_INIT;
 
 #define CMOS_ADDRESS_PORT 0x70u
 #define CMOS_DATA_PORT 0x71u
@@ -24,6 +27,10 @@ static uint8_t cached_day;
 static uint8_t cached_month;
 static uint16_t cached_year;
 static uint8_t rtc_ready;
+static uint8_t rtc_valid;
+int rtc_driver_transaction(int (*operation)(void *),void *context) {
+    KERNEL_GUARD(rtc_gate);return operation(context);
+}
 
 static inline void outb(uint16_t port, uint8_t value) {
     __asm__ volatile ("outb %0, %1" :: "a"(value), "Nd"(port));
@@ -50,6 +57,16 @@ static void wait_for_stable_rtc(void) {
 }
 
 static void rtc_read_current(void) {
+    KERNEL_GUARD(rtc_gate);
+    uint64_t date[8]={0};
+    int described=driver_clock_read(date);
+    if(described!=DRV_NOT_BOUND) {
+        rtc_valid=described==0 && date[0]>=1970 && date[0]<=9999 && date[1]>=1 && date[1]<=12 &&
+            date[2]>=1 && date[2]<=31 && date[3]<24 && date[4]<60 && date[5]<60;
+        if(rtc_valid){cached_year=date[0];cached_month=date[1];cached_day=date[2];
+            cached_hours=date[3];cached_minutes=date[4];cached_seconds=date[5];}
+        return;
+    }
     uint8_t first_seconds;
     uint8_t second_seconds;
     uint8_t minutes;
@@ -91,6 +108,7 @@ static void rtc_read_current(void) {
     cached_day = day == 0 ? 1 : (uint8_t)(((day - 1u) % 31u) + 1u);
     cached_month = month == 0 ? 1 : (uint8_t)(((month - 1u) % 12u) + 1u);
     cached_year = (uint16_t)(2000u + (uint16_t)(year % 100u));
+    rtc_valid=1;
 }
 
 void rtc_init(void) {
@@ -129,6 +147,7 @@ uint8_t rtc_seconds(void) {
 }
 
 void rtc_get_hms(uint8_t *h, uint8_t *m, uint8_t *s) {
+    KERNEL_GUARD(rtc_gate);
     if (!rtc_ready) {
         rtc_init();
     } else {
@@ -167,4 +186,19 @@ uint16_t rtc_year(void) {
     }
 
     return cached_year;
+}
+
+int rtc_epoch_seconds(uint64_t *out) {
+    KERNEL_GUARD(rtc_gate);
+    if(!out)return -1;if(!rtc_ready)rtc_init();else rtc_read_current();
+    if(!rtc_valid)return -1;
+    unsigned y=cached_year,m=cached_month,d=cached_day;
+    static const unsigned md[]={31,28,31,30,31,30,31,31,30,31,30,31};
+    if(y<1970 || y>9999 || m<1 || m>12 || !d || cached_hours>23 || cached_minutes>59 || cached_seconds>59)return -1;
+    unsigned leap=y%4==0 && (y%100!=0 || y%400==0);
+    if(d>md[m-1]+(m==2 && leap))return -1;
+    uint64_t days=0;
+    for(unsigned i=1970;i<y;i++)days+=365+(i%4==0 && (i%100!=0 || i%400==0));
+    for(unsigned i=1;i<m;i++)days+=md[i-1]+(i==2 && leap);
+    days+=d-1;*out=days*86400+cached_hours*3600+cached_minutes*60+cached_seconds;return 0;
 }

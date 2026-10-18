@@ -1,0 +1,6 @@
+// Body exceptions must not be mistaken for arity errors after early returns.
+fun body_error(n) { if n == 0 { return 0; } return [][0]; }
+fun early(a, b, c) { for i in 0..3 { if i == a { return b + c; } } return 0; }
+print(early(1, 2, 3));
+try { body_error(1); } else error { print(error.message); }
+try { early(1); } else error { print("arity rejected"); }

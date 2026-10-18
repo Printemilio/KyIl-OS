@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <unos/keyboard.h>
+#include <unos/browser_state.h>
 
 #define GUI_TASKBAR_HEIGHT 42ull
 #define GUI_WINDOW_MARGIN 12ull
@@ -14,13 +15,13 @@
 #define GUI_FRAME_INTERVAL_TICKS 3ull
 #define GUI_CLOCK_UPDATE_TICKS 100ull
 #define GUI_WINDOW_CONTROL_RADIUS 5ull
-#define GUI_CONTEXT_MENU_WIDTH 224ull
-#define GUI_CONTEXT_MENU_HEIGHT 244ull
-#define GUI_CONTEXT_MENU_ROW_HEIGHT 32ull
+#define GUI_CONTEXT_MENU_WIDTH 250ull
+#define GUI_CONTEXT_MENU_HEIGHT 168ull
+#define GUI_CONTEXT_MENU_ROW_HEIGHT 38ull
 #define GUI_CONTEXT_MENU_PAD 8ull
 #define GUI_DIRTY_RECT_MAX 96u
-#define GUI_BROWSER_SHELL_HEIGHT 86ull
-#define GUI_BROWSER_ADDRESS_MAX 160u
+#define GUI_BROWSER_SHELL_HEIGHT 67ull
+#define GUI_BROWSER_ADDRESS_MAX VEX_BROWSER_URI_SIZE
 #define GUI_PAINT_TOOLBAR_HEIGHT 44ull
 #define GUI_PAINT_SWATCH_SIZE 20ull
 #define GUI_WINDOW_RESIZE_HANDLE 18ull
@@ -96,6 +97,7 @@ extern uint64_t browser_win_h;
 extern char browser_address[GUI_BROWSER_ADDRESS_MAX];
 extern uint64_t browser_address_len;
 extern uint8_t browser_address_focused;
+extern uint8_t browser_window_focused;
 extern uint8_t browser_tab_count;
 extern uint8_t browser_results_drawn;
 extern uint8_t browser_loading_visible;
@@ -116,6 +118,13 @@ extern uint64_t paint_last_x;
 extern uint64_t paint_last_y;
 
 uint32_t pack_color(uint8_t r, uint8_t g, uint8_t b);
+void gui_blit_rgba(uint64_t x, uint64_t y, const uint8_t *data, uint64_t iw, uint64_t ih);
+void paint_handle_hover(uint64_t x, uint64_t y);
+void gui_font_text(uint64_t x, uint64_t y, const char *text, uint32_t color, uint8_t size);
+void gui_font_text_clipped(uint64_t x, uint64_t y, const char *text,
+                           uint32_t color, uint8_t size, uint64_t max_w);
+uint64_t gui_font_text_width(const char *text, uint8_t size);
+uint8_t gui_font_cell_height(uint8_t size);
 void fill_rect(uint64_t x, uint64_t y, uint64_t w, uint64_t h, uint32_t color);
 void fill_circle(uint64_t cx, uint64_t cy, uint64_t r, uint32_t color);
 void fill_rounded_rect(uint64_t x, uint64_t y, uint64_t w, uint64_t h, uint64_t r, uint32_t color);

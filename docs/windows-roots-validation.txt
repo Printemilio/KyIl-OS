@@ -1,0 +1,78 @@
+Windows native-root and file checkpoint — 2026-10-11
+
+Latest ISO: build/kyilos-windows-roots.iso
+SHA256 F4B5617DDD02B024B15739D79898245336338724FBC4A536D20EC7886F173C0B
+Kernel SHA256 5BBEFB8C21F775AB6BECF566A50B8DD4A412D4A501CFAE74B4D29B1AFF5C7784
+Runtime SHA256 D117B0392117FBDD740DA9EC75C7B1528AA2DDC182F102422E01645D43F1985B
+Prior validated ISO build/kyilos-windows-tls.iso and Dell/Suchu images retained.
+
+APPROVED ARCHITECTURE / IMPLEMENTATION
+- Generic native FS_ROOT syscall 225. Independent anchor identity, reference
+  lifetime, typed process-local capabilities, immutable rights and principal.
+- Atomic normalization/resolution/open under FS namespace transaction;
+  escaping symlinks/dotdot rejected. Live anchor and ancestor rebinding denied.
+- Root references retained by files/directories/stream resources and IPC.
+- Derivation attenuates rights. TRANSFER checked in message engine.
+- Permanent process-group seal removes ambient pathname access, inherited by
+  fork/threads/child groups and preserved by exec. Root operations carry a
+  private trusted authority; scheduler credentials are not rewritten.
+- Windows userspace binds actual C: prefix and read-only A: package mapping,
+  verifies grants and seals before PE callbacks/entry. Windows names/types
+  remain outside the kernel. Standard/file handles now retain real native FDs.
+
+EXECUTED IN VM, 1 AND 4 vCPU (BIOS, 4096 MiB, dedicated disposable data disk)
+- Native root smoke: identity vs rights, rights attenuation, kernel output
+  pointer refusal, dotdot/symlink escapes, anchor rebinding refusal, real read/
+  write/metadata, seal, parallel readers, inherited fork seal/capabilities,
+  non-transferable refusal, actual IPC after producer death, different receiver
+  local FD, unchanged rights and actual delegated file bytes, last references.
+- Windows file PE: 65,537 nonconstant bytes actually written/flushed/reopened/
+  compared, exact size, seek/read, overflow refusal, readonly/stale/invalid-buffer
+  errors, A: write refusal, unsupported sharing explicit refusal, raw native
+  OPEN_EX outside roots rejected. Runs on same final ISO in both CPU modes.
+- Complete prior runner remains PASS with Windows groups sealed: three PE/DLL
+  cycles + four rejection paths, EXE/two-DLL/8-thread TLS, native GS, loader
+  callback re-entry, SRW, stack guard, VEH/CFG, events, SHM section/view lifetime,
+  concurrent process exits, native console/capabilities, libc threads (187 checks),
+  Linux thread/FPU, W^X, synchronous faults and memory ownership/fork teardown.
+- No kernel panic or failed runner in final logs. Expected malformed-PE and
+  unsupported API load failures remain explicit.
+
+RAW EVIDENCE
+ build/windows/fs-roots-4cpu-ipc-pass.log
+ build/windows/windows-roots-final-4cpu.log
+ build/windows/windows-roots-final-1cpu.log
+ build/windows/windows-files-4cpu-errno-failure.log (reproduced errno defect)
+ build/windows/host-tests-final.log (21 parser + 80,000 NLS + CFG ABI)
+
+CAUSAL CORRECTIONS
+- File I/O pointer validation rejected invalid buffers but left native errno=0;
+  set EFAULT in read/write/pread/pwrite failure paths, preserving checks.
+- lseek CUR/END performed unchecked signed addition; checked bounds/magnitude
+  before arithmetic, including INT64_MIN. File PE tests overflow refusal.
+- Earlier process exit race and CFG XMM6-15 bridge corrections remain intact.
+
+EXACT CHROME FRONTIER
+Unmodified Chrome Windows 155.0.8059.39 + chrome_elf.dll:
+ windows: userspace direct PE loader / native ABI
+ windows: missing import KERNEL32.dll!CreateIoCompletionPort
+ windows: load failed: Windows API not implemented
+Chrome has not executed its EXE entry, created a window, or navigated.
+The missing API is not a success thunk. No full Windows compatibility claimed.
+
+REAL LIMITS
+- Current CreateFileW subset: fully shared opens (share=7), no custom security/
+  template, normal attributes; CREATE_NEW, OPEN_EXISTING, TRUNCATE_EXISTING.
+- Other sharing modes, CREATE_ALWAYS/OPEN_ALWAYS, overlapped I/O, named objects,
+  full directory/Win32 metadata semantics are explicitly unsupported.
+- Native separate file opens still use snapshot-style file contexts, not a
+  complete stable mutable-file object model. File-sharing/rename/unlink semantics
+  need further work before being declared Windows-equivalent.
+- Registry, dynamic DLL loading/unloading/TLS publication, full SEH/unwind,
+  API-set DLLs, Windows process/sandbox/UI/network contracts remain unfinished.
+- Root-based executable-resource launch is not exposed yet; EXEC is reserved
+  authority. Existing unsealed native/ELF/Linux exec regressions pass.
+- IOCP requires genuine completions and runnable-consumer concurrency; queues/
+  event counters alone are not claimed equivalent. No IOCP implementation yet.
+- No physical Dell test; old timers/CPU fallback/ORA/FlowSched/graphics unchanged
+  except necessary generic root-policy inheritance, FD/FS/IPC authority/lifetime.

@@ -1,0 +1,167 @@
+// for, try and match. Each case prints from inside, so laziness and the order
+// things run in are visible rather than assumed.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun loud(value) {
+  print("  evaluating case " @ value);
+  return value;
+}
+
+fun main() {
+  // ---------- for ----------
+  total = 0;
+  for (n in [1, 2, 3, 4]) { total = total + n; }
+  show("sum of a list = ", total);
+
+  joined = "";
+  for (letter in "abc") { joined = joined @ letter @ "."; }
+  show("over a string = ", joined);
+
+  seen = 0;
+  for (n in set {1, 2, 2, 3}) { seen = seen + 1; }
+  show("over a set = ", seen);
+
+  fields = "";
+  for (name in { a: 1; b: 2; }) { fields = fields @ name @ " "; }
+  show("over a record = ", fields);
+
+  ranged = 0;
+  for (n in 1..5) { ranged = ranged + n; }
+  show("over a range = ", ranged);
+
+  empty = "untouched";
+  for (n in []) { empty = "touched"; }
+  show("over an empty list = ", empty);
+
+  // break and continue inside for, and the loop variable after it.
+  picked = "";
+  for (n in 1..6) {
+    if (n == 2) { continue; }
+    if (n == 5) { break; }
+    picked = picked @ n @ " ";
+  }
+  show("with break and continue = ", picked);
+
+  // Nested, with break in the inner loop only.
+  pairs = "";
+  for (a in 1..2) {
+    for (b in 1..3) {
+      if (b == 3) { break; }
+      pairs = pairs @ a @ ":" @ b @ " ";
+    }
+  }
+  show("nested = ", pairs);
+
+  // A for inside a function that returns from within the loop.
+  show("returning out of a for = ", first_even([1, 3, 6, 8]));
+
+  // ---------- match ----------
+  // Only the cases before the match are evaluated.
+  print("match 2 against three cases:");
+  match 2 {
+    case loud(1) { show("  took ", 1); }
+    case loud(2) { show("  took ", 2); }
+    case loud(3) { show("  took ", 3); }
+  }
+
+  print("match 9, no case matches:");
+  match 9 {
+    case loud(1) { show("  took ", 1); }
+    default { print("  took the default"); }
+  }
+
+  // No default and nothing matches: the statement does nothing.
+  fell = "nothing ran";
+  match 7 {
+    case 1 { fell = "one"; }
+  }
+  show("no default = ", fell);
+
+  // Matching on other kinds of value.
+  match "b" {
+    case "a" { print("string case a"); }
+    case "b" { print("string case b"); }
+  }
+  match true {
+    case false { print("bool case false"); }
+    case true { print("bool case true"); }
+  }
+  match none {
+    case none { print("none matches none"); }
+  }
+
+  // A match whose branches return.
+  show("classify(0) = ", classify(0));
+  show("classify(5) = ", classify(5));
+  show("classify(9) = ", classify(9));
+
+  // ---------- try ----------
+  // A named error, and its message.
+  try {
+    assert(false);
+  } else e {
+    show("caught, message = ", e.message);
+  }
+
+  // Without a name.
+  try {
+    n = 1 % 0;
+    print("this must not print");
+  } else {
+    print("caught an unnamed error");
+  }
+
+  // Nothing raises: the handler must not run.
+  try {
+    print("the attempted block ran");
+  } else {
+    print("this must not print");
+  }
+
+  // A variable made in the try does not outlive it, so it is declared before.
+  value = "default";
+  try { value = "assigned"; } else { }
+  show("survived the try = ", value);
+
+  // return travels through a try rather than being caught by it.
+  show("returning through a try = ", returns_from_try());
+
+  // Nested: the inner handler takes it, the outer one does not.
+  try {
+    try {
+      assert(false);
+    } else {
+      print("the inner handler took it");
+    }
+  } else {
+    print("this must not print");
+  }
+}
+
+fun first_even(values) {
+  for (n in values) {
+    if (n % 2 == 0) { return n; }
+  }
+  return none;
+}
+
+fun classify(n) {
+  match n {
+    case 0 { return "zero"; }
+    case 5 { return "five"; }
+    default { return "other"; }
+  }
+}
+
+fun returns_from_try() {
+  try {
+    return "returned";
+  } else {
+    return "the handler ran";
+  }
+}
+
+main();

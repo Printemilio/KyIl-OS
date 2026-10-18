@@ -1,0 +1,31 @@
+// What a wrong type says. The message names the operation and what it was given,
+// which is the part that tells the reader which of their values it meant. It used
+// to be 'Expected integer value', which named neither.
+
+fun attempt(label, f) {
+  try {
+    f();
+    print(label @ " -> no error");
+  } else e {
+    print(label @ " -> " @ e.message);
+  }
+}
+
+fun main() {
+  letter = "b";
+  nothing = none;
+  items = [1, 2];
+
+  attempt("range bound   ", fun() { for i in 1..letter { print(i); } });
+  attempt("range with to ", fun() { for i in 1 to letter { print(i); } });
+  attempt("plus          ", fun() { return 1 + letter; });
+  attempt("minus a list  ", fun() { return items - 2; });
+  attempt("times none    ", fun() { return nothing * 3; });
+  attempt("divide        ", fun() { return letter / 2; });
+  attempt("power         ", fun() { return 2 ** letter; });
+  attempt("long string   ", fun() { return 1 - "a string that is well over thirty characters"; });
+  attempt("accent        ", fun() { return "é" * 2; });
+  attempt("fine          ", fun() { return 1 + 2; });
+}
+
+main();

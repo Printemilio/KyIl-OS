@@ -1,0 +1,31 @@
+// The first program the raylib backend drew.
+// Volontairement limite a ce que le backend sait faire : Window, Column,
+// Row et Label.
+
+Window("Suchu - raylib backend", 640px, 380px) {
+  background: #111827;
+  layout: column;
+  padding: 28px;
+  spacing: 16px;
+
+  Label { text: "Bonjour depuis raylib"; font-size: 34px; font-weight: bold; }
+
+  Label {
+    text: "Accents latins : éàèùç ößä łźć ğş";
+    font-size: 18px;
+    color: #94a3b8;
+  }
+
+  Row {
+    spacing: 12px;
+
+    Label { text: "Statut :"; font-size: 16px; color: #94a3b8; }
+    Label { id: "status"; text: "arbre retenu, redessine a 60 FPS"; font-size: 16px; color: #7dd3fc; }
+  }
+
+  Label {
+    text: "Label { id: \"display\"; text: \"Count: 0\"; }";
+    font-size: 14px;
+    color: #7dd3fc;
+  }
+}

@@ -5,6 +5,7 @@
 # void resume_syscall_return(uint64_t frame_rsp, uint64_t return_value)
 # rdi = saved syscall frame rsp, rsi = return rax value.
 resume_syscall_return:
+    cli                         # scheduler may have restored IF before entry
     mov %rdi, %rsp
     mov %rsi, %rax
     add $24, %rsp
@@ -23,4 +24,6 @@ resume_syscall_return:
     pop %rbx
     pop %r11
     pop %rcx
+    pop %rsp
+    swapgs
     sysretq

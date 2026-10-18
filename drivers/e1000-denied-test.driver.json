@@ -1,0 +1,1021 @@
+{
+  "format": 1,
+  "minor": 1,
+  "engine_min": 2,
+  "name": "e1000-denied-test",
+  "platform": "pci.network",
+  "bus": "pci",
+  "class": "network",
+  "vendor": 32902,
+  "device": 4110,
+  "pci_class": 131072,
+  "priority": 0,
+  "features": [
+    "base",
+    "buffer",
+    "dma",
+    "mmio",
+    "irq"
+  ],
+  "irq": 11,
+  "scratch": 4096,
+  "resources": [
+    {
+      "kind": "mmio",
+      "length": 21512,
+      "rights": [
+        "read",
+        "write"
+      ],
+      "widths": 4
+    },
+    {
+      "kind": "dma",
+      "selector": 0,
+      "length": 65536,
+      "rights": [
+        "read",
+        "write"
+      ],
+      "widths": 15
+    },
+    {
+      "kind": "dma",
+      "selector": 1,
+      "length": 512,
+      "rights": [
+        "read",
+        "write"
+      ],
+      "widths": 15
+    },
+    {
+      "kind": "dma",
+      "selector": 2,
+      "length": 512,
+      "rights": [
+        "read",
+        "write"
+      ],
+      "widths": 15
+    }
+  ],
+  "entries": {
+    "probe": [
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 8
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 4294967295
+      },
+      {
+        "op": "eq",
+        "dst": 21,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "jz",
+        "a": 21,
+        "target": "valid"
+      },
+      {
+        "op": "ret",
+        "imm": -12
+      },
+      {
+        "label": "valid"
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "stop": [
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 4294967295
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 216
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 256
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 1024
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 67108864
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 0
+      },
+      {
+        "label": "reset"
+      },
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 0
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 67108864
+      },
+      {
+        "op": "and",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "jnz",
+        "a": 20,
+        "target": "reset"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 4294967295
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 216
+      },
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 192
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "init": [
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 2
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 256
+      },
+      {
+        "op": "ret"
+      }
+    ],
+    "irq": [
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 192
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "control": [
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 8
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 2
+      },
+      {
+        "op": "and",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "shr",
+        "dst": 8,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "diagnostic": [
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 8
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 2
+      },
+      {
+        "op": "and",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "shr",
+        "dst": 8,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "read",
+        "dst": 9,
+        "b": 4,
+        "aux": 0,
+        "imm": 10256
+      },
+      {
+        "op": "read",
+        "dst": 10,
+        "b": 4,
+        "aux": 0,
+        "imm": 10264
+      },
+      {
+        "op": "read",
+        "dst": 11,
+        "b": 4,
+        "aux": 0,
+        "imm": 256
+      },
+      {
+        "op": "read",
+        "dst": 12,
+        "b": 4,
+        "aux": 0,
+        "imm": 16544
+      },
+      {
+        "op": "read",
+        "dst": 13,
+        "b": 4,
+        "aux": 0,
+        "imm": 16400
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2072
+      },
+      {
+        "op": "load",
+        "dst": 19,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 14,
+        "imm": 0
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 0
+      },
+      {
+        "op": "dma",
+        "aux": 12,
+        "dst": 20
+      },
+      {
+        "op": "or",
+        "dst": 14,
+        "a": 14,
+        "b": 20
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 1
+      },
+      {
+        "op": "dma",
+        "aux": 12,
+        "dst": 20
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 8
+      },
+      {
+        "op": "shl",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "or",
+        "dst": 14,
+        "a": 14,
+        "b": 20
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 2
+      },
+      {
+        "op": "dma",
+        "aux": 12,
+        "dst": 20
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 16
+      },
+      {
+        "op": "shl",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "or",
+        "dst": 14,
+        "a": 14,
+        "b": 20
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 3
+      },
+      {
+        "op": "dma",
+        "aux": 12,
+        "dst": 20
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 24
+      },
+      {
+        "op": "shl",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "or",
+        "dst": 14,
+        "a": 14,
+        "b": 20
+      },
+      {
+        "op": "ret"
+      }
+    ],
+    "write": [
+      {
+        "op": "mov",
+        "dst": 25,
+        "a": 0
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2048
+      },
+      {
+        "op": "load",
+        "dst": 16,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2064
+      },
+      {
+        "op": "load",
+        "dst": 18,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2080
+      },
+      {
+        "op": "load",
+        "dst": 24,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 18
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 24
+      },
+      {
+        "op": "dma",
+        "aux": 10,
+        "dst": 28
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 11
+      },
+      {
+        "op": "shl",
+        "dst": 27,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 16
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 27
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 0
+      },
+      {
+        "op": "mov",
+        "dst": 3,
+        "a": 25
+      },
+      {
+        "op": "dma",
+        "aux": 8,
+        "dst": 28
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 4
+      },
+      {
+        "op": "shl",
+        "dst": 27,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 11
+      },
+      {
+        "op": "add",
+        "dst": 27,
+        "a": 27,
+        "b": 31
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 18
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 27
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 1
+      },
+      {
+        "op": "const",
+        "dst": 3,
+        "imm": 11
+      },
+      {
+        "op": "dma",
+        "aux": 4,
+        "dst": 28
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 18
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 24
+      },
+      {
+        "op": "mov",
+        "dst": 2,
+        "a": 25
+      },
+      {
+        "op": "dma",
+        "aux": 11,
+        "dst": 28
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "add",
+        "dst": 24,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 32
+      },
+      {
+        "op": "mod",
+        "dst": 24,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2080
+      },
+      {
+        "op": "store",
+        "dst": 24,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "read": [
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2056
+      },
+      {
+        "op": "load",
+        "dst": 17,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2072
+      },
+      {
+        "op": "load",
+        "dst": 19,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2088
+      },
+      {
+        "op": "load",
+        "dst": 24,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 24
+      },
+      {
+        "op": "dma",
+        "aux": 10,
+        "dst": 26
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 4
+      },
+      {
+        "op": "shl",
+        "dst": 27,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 12
+      },
+      {
+        "op": "add",
+        "dst": 27,
+        "a": 27,
+        "b": 31
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 27
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 1
+      },
+      {
+        "op": "dma",
+        "aux": 3,
+        "dst": 20
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 3
+      },
+      {
+        "op": "and",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 3
+      },
+      {
+        "op": "eq",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "jz",
+        "a": 20,
+        "target": "drop"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 4
+      },
+      {
+        "op": "shl",
+        "dst": 27,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 13
+      },
+      {
+        "op": "add",
+        "dst": 27,
+        "a": 27,
+        "b": 31
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 27
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 1
+      },
+      {
+        "op": "dma",
+        "aux": 3,
+        "dst": 20
+      },
+      {
+        "op": "jnz",
+        "a": 20,
+        "target": "drop"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "eq",
+        "dst": 20,
+        "a": 26,
+        "b": 31
+      },
+      {
+        "op": "jnz",
+        "a": 20,
+        "target": "drop"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1519
+      },
+      {
+        "op": "lt",
+        "dst": 20,
+        "a": 26,
+        "b": 31
+      },
+      {
+        "op": "jz",
+        "a": 20,
+        "target": "drop"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 11
+      },
+      {
+        "op": "shl",
+        "dst": 27,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 17
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 27
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 0
+      },
+      {
+        "op": "mov",
+        "dst": 3,
+        "a": 26
+      },
+      {
+        "op": "dma",
+        "aux": 9,
+        "dst": 28
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 24
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 2048
+      },
+      {
+        "op": "dma",
+        "aux": 11,
+        "dst": 28
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "add",
+        "dst": 24,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 32
+      },
+      {
+        "op": "mod",
+        "dst": 24,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2088
+      },
+      {
+        "op": "store",
+        "dst": 24,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "mov",
+        "dst": 8,
+        "a": 26
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      },
+      {
+        "label": "drop"
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 24
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 2048
+      },
+      {
+        "op": "dma",
+        "aux": 11,
+        "dst": 28
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "add",
+        "dst": 24,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 32
+      },
+      {
+        "op": "mod",
+        "dst": 24,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2088
+      },
+      {
+        "op": "store",
+        "dst": 24,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "ret",
+        "imm": -13
+      }
+    ]
+  },
+  "info": {
+    "purpose": "negative hardware protection regression: enables RX before any ring exists; must fail"
+  }
+}

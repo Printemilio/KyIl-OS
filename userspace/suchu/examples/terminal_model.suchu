@@ -1,0 +1,70 @@
+// Suchu owns the textual view and history; the OS owns command execution.
+import textbytes;
+esc=textbytes.character(27);
+fun create() { return {lines:[""]; cursor:0; escape:""; bytes:0; revision:0; top:0; follow:true; history:[]; history_at:0; draft:"";}; }
+fun plain(d,text) {
+  if text=="" { return; }
+  index=len(d.lines)-1; old=d.lines[index]; stop=d.cursor;
+  if stop<len(old) {
+    at=0; while at<len(text) && stop<len(old) { at=textbytes.next(text,at); stop=textbytes.next(old,stop); }
+  }
+  d.lines[index]=textbytes.sub(old,0,d.cursor) @ text @ textbytes.sub(old,stop,len(old)-stop);
+  d.bytes=d.bytes+len(d.lines[index])-len(old); d.cursor=d.cursor+len(text);
+}
+fun clear(d) { d.lines=[""]; d.cursor=0; d.bytes=0; d.top=0; d.follow=true; d.escape=""; d.revision=d.revision+1; }
+fun control(d,n) {
+  if n==10 { push(d.lines,""); d.cursor=0; }
+  if n==13 { d.cursor=0; }
+  if n==8 && d.cursor>0 {
+    i=len(d.lines)-1; old=d.lines[i]; at=textbytes.prev(old,d.cursor);
+    d.lines[i]=textbytes.sub(old,0,at) @ " " @ textbytes.sub(old,d.cursor,len(old)-d.cursor);
+    d.bytes=d.bytes-(d.cursor-at)+1; d.cursor=at;
+  }
+  if n==9 { plain(d,"    "); }
+}
+fun feed(d,text) {
+  if text=="" { return; } d.revision=d.revision+1;
+  at=0; start=0;
+  while at<len(text) {
+    n=textbytes.byte(text,at);
+    if d.escape!="" {
+      if d.escape==esc {
+        d.escape=if n==91 then esc @ "[" else "";
+      } else if n>=64 && n<=126 {
+        command=d.escape @ textbytes.sub(text,at,1);
+        if command==(esc @ "[2J") { clear(d); }
+        if command==(esc @ "[H") { d.cursor=0; }
+        d.escape="";
+      } else if len(d.escape)<32 { d.escape=d.escape @ textbytes.sub(text,at,1); }
+      else { d.escape=""; }
+      at=at+1; start=at;
+    } else if n<32 || n==127 {
+      plain(d,textbytes.sub(text,start,at-start));
+      if n==27 { d.escape=esc; } else { control(d,n); }
+      at=at+1; start=at;
+    } else { at=at+1; }
+  }
+  plain(d,textbytes.sub(text,start,at-start));
+  while len(d.lines)>2048 || (d.bytes>262144 && len(d.lines)>1) {
+    d.bytes=d.bytes-len(d.lines[0]); remove(d.lines,0); d.top=max(0,d.top-1);
+  }
+  if len(d.lines[len(d.lines)-1])>65536 {
+    i=len(d.lines)-1; old=d.lines[i]; cut=textbytes.next(old,len(old)-65536);
+    d.lines[i]=textbytes.sub(old,cut,len(old)-cut); d.cursor=max(0,d.cursor-cut); d.bytes=d.bytes-cut;
+  }
+}
+fun remember(d,text) {
+  if text!="" && (len(d.history)==0 || d.history[len(d.history)-1]!=text) {
+    push(d.history,text); if len(d.history)>100 { remove(d.history,0); }
+  }
+  d.history_at=len(d.history); d.draft="";
+}
+fun previous(d,current) {
+  if d.history_at==len(d.history) { d.draft=current; }
+  d.history_at=max(0,d.history_at-1);
+  return if d.history_at<len(d.history) then d.history[d.history_at] else current;
+}
+fun next(d) {
+  d.history_at=min(len(d.history),d.history_at+1);
+  return if d.history_at<len(d.history) then d.history[d.history_at] else d.draft;
+}

@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <unos/heap.h>
+#include <unos/security.h>
 #include <unos/scheduler.h>
 
 typedef struct user_node {
@@ -74,7 +75,9 @@ int user_create(const char *username, uint8_t is_admin) {
         return -1;
     }
 
-    if (users != NULL && !user_is_admin()) {
+    if (users != NULL && !user_has_capability(VEX_CAP_USER_ADMIN)) {
+        security_audit_log_event("user-create", username, scheduler_current_pid(), scheduler_current_uid(),
+                                 scheduler_current_capabilities(), 0u);
         return -1;
     }
 
@@ -90,8 +93,11 @@ int user_create(const char *username, uint8_t is_admin) {
     node->user.uid = next_uid++;
     copy_username(node->user.username, username);
     node->user.is_admin = is_admin != 0;
+    node->user.capabilities = security_default_caps_for_admin(is_admin);
     node->next = users;
     users = node;
+    security_audit_log_event("user-create", username, scheduler_current_pid(), scheduler_current_uid(),
+                             scheduler_current_capabilities(), 1u);
     return 0;
 }
 
@@ -102,15 +108,27 @@ int user_login(const char *username) {
 
     user_node_t *node = find_user_by_name(username);
     if (node == NULL) {
+        security_audit_log_event("login", username, scheduler_current_pid(), scheduler_current_uid(),
+                                 scheduler_current_capabilities(), 0u);
         return -1;
     }
 
-    scheduler_set_current_credentials(node->user.uid, node->user.is_admin);
+    scheduler_set_current_credentials(node->user.uid, node->user.capabilities);
+    security_audit_log_event("login", username, scheduler_current_pid(), scheduler_current_uid(),
+                             scheduler_current_capabilities(), 1u);
     return 0;
 }
 
 uint32_t user_current_uid(void) {
     return scheduler_current_uid();
+}
+
+uint32_t user_current_capabilities(void) {
+    return scheduler_current_capabilities();
+}
+
+uint8_t user_has_capability(uint32_t capabilities) {
+    return scheduler_current_has_capability(capabilities);
 }
 
 uint8_t user_is_admin(void) {
@@ -119,5 +137,26 @@ uint8_t user_is_admin(void) {
 
 const char *user_current_username(void) {
     user_node_t *node = find_user_by_uid(user_current_uid());
+    return node == NULL ? "unknown" : node->user.username;
+}
+
+int user_lookup_uid(const char *username, uint32_t *uid_out) {
+    user_node_t *node;
+
+    if (username == NULL || uid_out == NULL) {
+        return -1;
+    }
+
+    node = find_user_by_name(username);
+    if (node == NULL) {
+        return -1;
+    }
+
+    *uid_out = node->user.uid;
+    return 0;
+}
+
+const char *user_name_for_uid(uint32_t uid) {
+    user_node_t *node = find_user_by_uid(uid);
     return node == NULL ? "unknown" : node->user.username;
 }

@@ -1,0 +1,37 @@
+fun demonstrate_postfix() {
+  counter = 3;
+  print("Starting counter: " @ counter);
+
+  previous = counter++;
+  print("counter++ returned: " @ previous);
+  print("After counter++: " @ counter);
+
+  previous = counter--;
+  print("counter-- returned: " @ previous);
+  print("After counter--: " @ counter);
+}
+
+fun demonstrate_list_ops() {
+  queue = [1, 2, 3];
+  print("Initial queue: " @ queue);
+
+  queue@4;
+  print("After queue@4: " @ queue);
+
+  pulled = @queue;
+  print("pull returned: " @ pulled);
+  print("After pull: " @ queue);
+
+  insert(queue, 1, 99);
+  print("After insert(queue, 1, 99): " @ queue);
+
+  remove(queue, 2);
+  print("After remove(queue, 2): " @ queue);
+}
+
+fun main() {
+  demonstrate_postfix();
+  demonstrate_list_ops();
+}
+
+main();

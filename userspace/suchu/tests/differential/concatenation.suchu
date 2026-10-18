@@ -1,0 +1,52 @@
+// A chain of '@' that starts with a string. The compiler writes it as one
+// concatenation, so every kind of right operand has to come out as text exactly
+// as the evaluator's '@' would have written it, and in the same order.
+
+fun loud(label, value) {
+  print("  evaluating " @ label);
+  return value;
+}
+
+fun grow(target) {
+  push(target, 2);
+  return "!";
+}
+
+fun main() {
+  n = 42;
+  f = 1.5;
+  neg = -7;
+  nothing = none;
+  flag = true;
+  items = [1, "two", 3.0];
+  record = { a: 1; b: "x"; };
+  s = "str";
+
+  print("int = " @ n);
+  print("float = " @ f);
+  print("negative = " @ neg);
+  print("none = " @ nothing);
+  print("bool = " @ flag);
+  print("list = " @ items);
+  print("record = " @ record);
+  print("string = " @ s);
+  print("long " @ n @ " and " @ f @ " and " @ s @ " end");
+  print("literals " @ 1 @ " " @ 2.5 @ " " @ true @ " " @ none);
+  print("arithmetic = " @ (n + 1) @ " / " @ (n * 2));
+
+  // A right operand that is itself an '@' is a value to convert, not more chain.
+  print("nested = " @ ([1] @ 2));
+
+  // Evaluated left to right, and each operand turned into text where it is
+  // evaluated: the list below is written out before grow() adds to it.
+  print("order: " @ loud("a", 1) @ loud("b", 2) @ loud("c", 3));
+  grown = [1];
+  print("snapshot = " @ grown @ grow(grown) @ grown);
+
+  // Not a chain: the left side is not a string literal, so this is a list append.
+  base = [0];
+  base @ 5;
+  print("append = " @ base);
+}
+
+main();

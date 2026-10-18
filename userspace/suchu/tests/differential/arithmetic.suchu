@@ -1,0 +1,46 @@
+// Every arithmetic operator, on integers and on floats, including the cases
+// where the two differ: division always widening to a float, integer powers
+// staying integers, the sign of a modulo, and negative zero.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun main() {
+  show("7 + 3 = ", 7 + 3);
+  show("7 - 3 = ", 7 - 3);
+  show("7 * 3 = ", 7 * 3);
+  show("7 / 3 = ", 7 / 3);
+  show("6 / 3 = ", 6 / 3);
+  show("7 % 3 = ", 7 % 3);
+  show("2 ** 10 = ", 2 ** 10);
+  show("2 ** 0 = ", 2 ** 0);
+  show("2 ** -1 = ", 2 ** -1);
+
+  show("0.1 + 0.2 = ", 0.1 + 0.2);
+  show("1.5 * 2.0 = ", 1.5 * 2.0);
+  show("7.0 / 2.0 = ", 7.0 / 2.0);
+  show("2.0 ** 0.5 = ", 2.0 ** 0.5);
+  show("1 + 2.5 = ", 1 + 2.5);
+
+  // Unary minus is a subtraction from zero in the generated code, which is
+  // only indistinguishable from a real negation if zero keeps its sign.
+  show("-7 = ", -7);
+  show("-7 % 3 = ", -7 % 3);
+  show("-0.0 = ", -0.0);
+  show("+7 = ", +7);
+  show("- -7 = ", - -7);
+
+  // Precedence and associativity, in one expression each.
+  show("1 + 2 * 3 = ", 1 + 2 * 3);
+  show("(1 + 2) * 3 = ", (1 + 2) * 3);
+  show("2 ** 3 ** 2 = ", 2 ** 3 ** 2);
+  show("10 - 4 - 3 = ", 10 - 4 - 3);
+  show("100 / 10 / 2 = ", 100 / 10 / 2);
+
+  // Values large enough to leave the range OCaml can hold unboxed.
+  show("big = ", 1000000 * 1000000);
+  show("bigger = ", 2 ** 62);
+}
+
+main();

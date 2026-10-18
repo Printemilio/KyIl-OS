@@ -1,0 +1,13 @@
+diff --git a/jitterentropy.h b/jitterentropy.h
+--- a/jitterentropy.h
++++ b/jitterentropy.h
+@@ -120,9 +120,11 @@ typedef intptr_t ssize_t;
+ # endif
+ #else
+ # include <sys/types.h>
++# if !defined(JENT_BAREMETAL)
+ # include <sys/stat.h>
+ # include <fcntl.h>
+ # include <unistd.h>
++# endif
+ #endif

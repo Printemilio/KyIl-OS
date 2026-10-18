@@ -1,0 +1,67 @@
+// Attrape un bord de la fenetre et tire.
+//
+// 'width: fill' et 'height: fill' prennent la place restante au lieu d'un
+// nombre de pixels. Le cadre de defilement absorbe la hauteur, le champ
+// absorbe la largeur, et le bouton garde la sienne.
+
+Window("Redimensionne-moi", 720px, 520px) {
+  background: #0f172a;
+  layout: column;
+  padding: 18px;
+  spacing: 14px;
+
+  Row {
+    width: fill;
+    spacing: 12px;
+
+    Label { text: "En-tete"; font-size: 22px; font-weight: bold; }
+    Box { width: fill; height: 3px; background: #1e293b; }
+    Label { text: "fixe a droite"; font-size: 13px; color: #64748b; }
+  }
+
+  // Ce cadre prend toute la hauteur qui reste entre l'en-tete et le pied.
+  Scroll {
+    width: fill;
+    height: fill;
+    padding: 14px;
+    spacing: 8px;
+    background: #1e293b;
+    border-radius: 10px;
+
+    Label { text: "Agrandis la fenetre en hauteur :"; font-size: 15px; color: #94a3b8; }
+    Label { text: "ce cadre grandit avec elle,"; font-size: 15px; }
+    Label { text: "et la barre de defilement disparait"; font-size: 15px; }
+    Label { text: "des qu'il y a la place pour tout."; font-size: 15px; }
+    Label { text: "Ligne 5"; font-size: 15px; }
+    Label { text: "Ligne 6"; font-size: 15px; }
+    Label { text: "Ligne 7"; font-size: 15px; }
+    Label { text: "Ligne 8"; font-size: 15px; }
+    Label { text: "Ligne 9"; font-size: 15px; }
+    Label { text: "Ligne 10 - fin"; font-size: 15px; }
+  }
+
+  // Pied : le champ mange la largeur restante, le bouton garde la sienne.
+  Row {
+    width: fill;
+    spacing: 10px;
+
+    Input {
+      id: "q";
+      placeholder: "Ce champ prend toute la largeur restante";
+      width: fill;
+      height: 40px;
+      font-size: 14px;
+      padding: 10px;
+      border-radius: 8px;
+    }
+
+    Button {
+      text: "Envoyer";
+      font-size: 14px;
+      padding: 10px;
+      min-height: 40px;
+      border-radius: 8px;
+      onClick: { set_text(q, ""); };
+    }
+  }
+}

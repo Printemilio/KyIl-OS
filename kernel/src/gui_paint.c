@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <unos/elf.h>
 #include <unos/heap.h>
 #include <unos/tty.h>
 
@@ -13,23 +14,30 @@ void paint_content_rect(uint64_t *x, uint64_t *y, uint64_t *w, uint64_t *h) {
     *h = browser_win_h > GUI_TITLE_HEIGHT + 12u ? browser_win_h - GUI_TITLE_HEIGHT - 12u : 0u;
 }
 
+/* Figma Frame 22: the canvas IS the whole content area; the tool palette
+   floats over it on the left. */
 void paint_canvas_rect(uint64_t *x, uint64_t *y, uint64_t *w, uint64_t *h) {
-    uint64_t content_x;
-    uint64_t content_y;
-    uint64_t content_w;
-    uint64_t content_h;
+    paint_content_rect(x, y, w, h);
+}
 
-    paint_content_rect(&content_x, &content_y, &content_w, &content_h);
-    *x = content_x + 10u;
-    *y = content_y + GUI_PAINT_TOOLBAR_HEIGHT + 8u;
-    *w = content_w > 20u ? content_w - 20u : 0u;
-    *h = content_h > GUI_PAINT_TOOLBAR_HEIGHT + 18u ? content_h - GUI_PAINT_TOOLBAR_HEIGHT - 18u : 0u;
+/* Floating left toolbar — Figma: 72×535 anchored bottom-left of the card */
+#define PAINT_CANVAS_COL  pack_color(217, 217, 217)
+#define PAINT_TOOLBAR_COL pack_color(39, 39, 39)
+#define PAINT_SEP_COL     pack_color(72, 49, 86)
+
+static void paint_toolbar_rect(uint64_t *x, uint64_t *y, uint64_t *w, uint64_t *h) {
+    uint64_t cx, cy, cw, ch;
+    paint_content_rect(&cx, &cy, &cw, &ch);
+    *w = 72u;
+    *h = ch > 575u ? 535u : (ch > 80u ? ch - 40u : ch);
+    *x = cx + 15u;
+    *y = cy + ch - *h - 14u;
 }
 
 void paint_clear_canvas(void) {
-    const uint32_t white = pack_color(255, 255, 255);
+    const uint32_t canvas_col = PAINT_CANVAS_COL;
     for (uint64_t i = 0; i < paint_canvas_pixels; ++i) {
-        paint_canvas[i] = white;
+        paint_canvas[i] = canvas_col;
     }
 }
 
@@ -59,6 +67,8 @@ int paint_ensure_canvas(uint64_t width, uint64_t height) {
     paint_clear_canvas();
     return 1;
 }
+
+static void draw_paint_toolbar(void);
 
 void paint_blit_canvas_region(uint64_t local_x, uint64_t local_y, uint64_t width, uint64_t height) {
     uint64_t canvas_x;
@@ -99,10 +109,20 @@ void paint_blit_canvas_region(uint64_t local_x, uint64_t local_y, uint64_t width
     }
 
     compositor_mark_dirty(canvas_x + local_x, canvas_y + local_y, width, height);
+
+    /* The toolbar floats over the canvas — repaint it if the blit touched it */
+    {
+        uint64_t tx, ty, tw, th;
+        paint_toolbar_rect(&tx, &ty, &tw, &th);
+        if (canvas_x + local_x < tx + tw && canvas_x + local_x + width > tx &&
+            canvas_y + local_y < ty + th && canvas_y + local_y + height > ty) {
+            draw_paint_toolbar();
+        }
+    }
 }
 
 void paint_stamp(uint64_t x, uint64_t y) {
-    const uint32_t color = paint_eraser ? pack_color(255, 255, 255) : paint_color;
+    const uint32_t color = paint_eraser ? PAINT_CANVAS_COL : paint_color;
     const uint64_t radius = paint_brush_radius == 0u ? 1u : paint_brush_radius;
     uint64_t min_x = x > radius ? x - radius : 0u;
     uint64_t min_y = y > radius ? y - radius : 0u;
@@ -160,66 +180,133 @@ void paint_stroke_line(uint64_t x0, uint64_t y0, uint64_t x1, uint64_t y1) {
     }
 }
 
+/* Color palette — starts with the Figma trio (red, black, blue);
+   "+" appends extra preset colors, up to 6 wells. */
+#define PAINT_PALETTE_MAX 6u
+static uint8_t paint_palette[PAINT_PALETTE_MAX][3] = {
+    { 242, 0, 0 }, { 0, 0, 0 }, { 47, 0, 255 },
+    { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }
+};
+static uint64_t paint_palette_count = 3u;
+static const uint8_t paint_palette_extras[3][3] = {
+    { 0, 200, 83 }, { 255, 200, 0 }, { 255, 255, 255 }
+};
+
+/* Toolbar vertical layout (relative to toolbar top) */
+#define PT_TOOL_ERASER_Y 32u
+#define PT_TOOL_CLEAR_Y  72u
+#define PT_SEP1_Y        102u
+#define PT_COLORS_Y      130u
+#define PT_COLOR_PITCH   36u
+
+static uint64_t paint_plus_y(void) { return PT_COLORS_Y + paint_palette_count * PT_COLOR_PITCH + 6u; }
+static uint64_t paint_sep2_y(void) { return paint_plus_y() + 30u; }
+static uint64_t paint_sizes_y(void) { return paint_sep2_y() + 28u; }
+
+/* Hovered toolbar item: 0 eraser, 1 clear, 10+i colors, 50 plus, 60+i sizes */
+static int paint_hover_item = -1;
+
+static uint64_t paint_item_center_y(int item, uint64_t ty) {
+    if (item == 0)  { return ty + PT_TOOL_ERASER_Y; }
+    if (item == 1)  { return ty + PT_TOOL_CLEAR_Y; }
+    if (item >= 10 && item < 50) { return ty + PT_COLORS_Y + (uint64_t)(item - 10) * PT_COLOR_PITCH; }
+    if (item == 50) { return ty + paint_plus_y() + 12u; }
+    if (item >= 60) { return ty + paint_sizes_y() + 16u + (uint64_t)(item - 60) * 36u; }
+    return ty;
+}
+
+static void draw_paint_toolbar(void) {
+    uint64_t tx, ty, tw, th;
+    const uint32_t white = pack_color(255, 255, 255);
+    const uint32_t accent = pack_color(205, 99, 244);
+    const uint32_t pink = pack_color(244, 114, 182);
+
+    paint_toolbar_rect(&tx, &ty, &tw, &th);
+    if (th < 500u) {
+        return;  /* window too small for the palette */
+    }
+
+    fill_rounded_rect(tx, ty, tw, th, 10u, PAINT_TOOLBAR_COL);
+
+    /* Hover: light rectangular highlight behind the hovered item */
+    if (paint_hover_item >= 0) {
+        const uint64_t hy = paint_item_center_y(paint_hover_item, ty);
+        fill_rounded_rect(tx + 6u, hy > 17u ? hy - 17u : 0u, tw - 12u, 34u, 8u,
+                          pack_color(58, 58, 58));
+    }
+
+    {
+        const uint64_t cx = tx + tw / 2u;
+
+        /* Eraser tool: pink-capped block (ring when active) */
+        if (paint_eraser) {
+            fill_rounded_rect(cx - 16u, ty + PT_TOOL_ERASER_Y - 14u, 32u, 28u, 8u, accent);
+            fill_rounded_rect(cx - 14u, ty + PT_TOOL_ERASER_Y - 12u, 28u, 24u, 7u, PAINT_TOOLBAR_COL);
+        }
+        fill_rounded_rect(cx - 10u, ty + PT_TOOL_ERASER_Y - 7u, 20u, 7u, 3u, pink);
+        fill_rounded_rect(cx - 10u, ty + PT_TOOL_ERASER_Y, 20u, 7u, 3u, white);
+
+        /* Clear: trash can (lid + body + slats) */
+        fill_rect(cx - 9u, ty + PT_TOOL_CLEAR_Y - 9u, 18u, 2u, white);            /* lid */
+        fill_rect(cx - 3u, ty + PT_TOOL_CLEAR_Y - 12u, 6u, 2u, white);            /* handle */
+        fill_rounded_rect(cx - 7u, ty + PT_TOOL_CLEAR_Y - 5u, 14u, 16u, 2u, white);
+        fill_rect(cx - 4u, ty + PT_TOOL_CLEAR_Y - 2u, 2u, 10u, PAINT_TOOLBAR_COL);
+        fill_rect(cx + 2u, ty + PT_TOOL_CLEAR_Y - 2u, 2u, 10u, PAINT_TOOLBAR_COL);
+
+        fill_rect(tx + 12u, ty + PT_SEP1_Y, tw - 24u, 1u, PAINT_SEP_COL);
+
+        /* Color wells (selection = accent ring) */
+        for (uint64_t i = 0u; i < paint_palette_count; ++i) {
+            const uint64_t cy = ty + PT_COLORS_Y + i * PT_COLOR_PITCH;
+            const uint32_t col = pack_color(paint_palette[i][0], paint_palette[i][1], paint_palette[i][2]);
+            if (!paint_eraser && paint_color == col) {
+                fill_circle(cx, cy, 16u, accent);
+            }
+            fill_circle(cx, cy, 13u, col);
+        }
+
+        /* "+" → add a color (hidden when the palette is full) */
+        if (paint_palette_count < PAINT_PALETTE_MAX) {
+            fill_rect(cx - 6u, ty + paint_plus_y() + 6u, 13u, 2u, white);
+            fill_rect(cx, ty + paint_plus_y(), 2u, 13u, white);
+        }
+
+        fill_rect(tx + 12u, ty + paint_sep2_y(), tw - 24u, 1u, PAINT_SEP_COL);
+
+        /* Brush sizes: 3 growing dots (selection = accent ring) */
+        for (uint64_t i = 0u; i < 3u; ++i) {
+            const uint64_t radius = i == 0u ? 2u : (i == 1u ? 4u : 7u);
+            const uint64_t dot_r = 7u + i * 4u;
+            const uint64_t cy = ty + paint_sizes_y() + 16u + i * 36u;
+            if (paint_brush_radius == radius) {
+                fill_circle(cx, cy, dot_r + 3u, accent);
+            }
+            fill_circle(cx, cy, dot_r, PAINT_CANVAS_COL);
+        }
+    }
+
+    compositor_mark_dirty(tx, ty, tw, th);
+}
+
 void draw_paint_workspace(void) {
-    uint64_t content_x;
-    uint64_t content_y;
-    uint64_t content_w;
-    uint64_t content_h;
     uint64_t canvas_x;
     uint64_t canvas_y;
     uint64_t canvas_w;
     uint64_t canvas_h;
-    const uint32_t bg = pack_color(14, 10, 24);
-    const uint32_t panel = pack_color(26, 18, 46);
-    const uint32_t border = pack_color(110, 58, 188);
-    const uint32_t text = pack_color(228, 220, 248);
-    const uint32_t muted = pack_color(150, 130, 185);
-    const uint32_t white = pack_color(255, 255, 255);
-    static const uint8_t swatches[6][3] = {
-        { 18, 18, 22 }, { 255, 255, 255 }, { 224, 68, 88 },
-        { 72, 132, 248 }, { 64, 196, 128 }, { 255, 188, 72 }
-    };
+    const uint32_t text = pack_color(255, 255, 255);
 
-    paint_content_rect(&content_x, &content_y, &content_w, &content_h);
     paint_canvas_rect(&canvas_x, &canvas_y, &canvas_w, &canvas_h);
-    if (content_w == 0u || content_h == 0u || canvas_w == 0u || canvas_h == 0u) {
+    if (canvas_w == 0u || canvas_h == 0u) {
         return;
     }
     if (!paint_ensure_canvas(canvas_w, canvas_h)) {
-        fill_rect(content_x, content_y, content_w, content_h, bg);
-        tty_draw_text_transparent_at(content_x + 18u, content_y + 18u, "VexPaint: allocation failed", text);
+        fill_rect(canvas_x, canvas_y, canvas_w, canvas_h, pack_color(20, 20, 20));
+        tty_draw_text_transparent_at(canvas_x + 18u, canvas_y + 18u, "VexPaint: allocation failed", text);
         return;
     }
 
-    fill_rect(content_x, content_y, content_w, content_h, bg);
-    fill_rounded_rect(content_x, content_y, content_w, GUI_PAINT_TOOLBAR_HEIGHT, 8u, panel);
-    tty_draw_text_transparent_at(content_x + 14u, content_y + 15u, "VexPaint", text);
-    tty_draw_text_transparent_at(content_x + 96u, content_y + 15u, paint_eraser ? "Tool: Eraser" : "Tool: Brush", muted);
-
-    for (uint64_t i = 0; i < 6u; ++i) {
-        const uint64_t swatch_x = content_x + 220u + i * 28u;
-        const uint32_t swatch = pack_color(swatches[i][0], swatches[i][1], swatches[i][2]);
-        fill_rounded_rect(swatch_x, content_y + 12u, GUI_PAINT_SWATCH_SIZE, GUI_PAINT_SWATCH_SIZE, 5u, swatch);
-        if (!paint_eraser && paint_color == swatch) {
-            fill_rounded_rect(swatch_x - 2u, content_y + 10u, GUI_PAINT_SWATCH_SIZE + 4u, GUI_PAINT_SWATCH_SIZE + 4u, 6u, white);
-            fill_rounded_rect(swatch_x, content_y + 12u, GUI_PAINT_SWATCH_SIZE, GUI_PAINT_SWATCH_SIZE, 5u, swatch);
-        }
-    }
-
-    fill_rounded_rect(content_x + content_w - 196u, content_y + 10u, 56u, 24u, 6u, paint_eraser ? pack_color(210, 60, 100) : pack_color(36, 26, 60));
-    tty_draw_text_transparent_at(content_x + content_w - 184u, content_y + 17u, "Gomme", paint_eraser ? white : muted);
-    fill_rounded_rect(content_x + content_w - 132u, content_y + 10u, 52u, 24u, 6u, pack_color(36, 26, 60));
-    tty_draw_text_transparent_at(content_x + content_w - 120u, content_y + 17u, "Clear", muted);
-
-    for (uint64_t i = 0; i < 3u; ++i) {
-        const uint64_t radius = i == 0u ? 2u : (i == 1u ? 4u : 7u);
-        const uint64_t button_x = content_x + content_w - 72u + i * 22u;
-        fill_rounded_rect(button_x, content_y + 10u, 18u, 24u, 5u, paint_brush_radius == radius ? pack_color(140, 60, 220) : pack_color(36, 26, 60));
-        fill_circle(button_x + 9u, content_y + 22u, radius, paint_brush_radius == radius ? white : muted);
-    }
-
-    fill_rect(canvas_x - 1u, canvas_y - 1u, canvas_w + 2u, canvas_h + 2u, border);
     paint_blit_canvas_region(0u, 0u, canvas_w, canvas_h);
+    draw_paint_toolbar();
 }
 
 gui_window_control_t paint_control_hit(uint64_t x, uint64_t y) {
@@ -227,13 +314,13 @@ gui_window_control_t paint_control_hit(uint64_t x, uint64_t y) {
         return GUI_WINDOW_CONTROL_NONE;
     }
 
-    if (window_control_circle_hit_at(x, y, browser_win_y, browser_win_x + 16u)) {
+    if (window_control_circle_hit_at(x, y, browser_win_y, browser_win_x + browser_win_w - 22u)) {
         return GUI_WINDOW_CONTROL_CLOSE;
     }
-    if (window_control_circle_hit_at(x, y, browser_win_y, browser_win_x + 32u)) {
+    if (window_control_circle_hit_at(x, y, browser_win_y, browser_win_x + browser_win_w - 48u)) {
         return GUI_WINDOW_CONTROL_MINIMIZE;
     }
-    if (window_control_circle_hit_at(x, y, browser_win_y, browser_win_x + 48u)) {
+    if (window_control_circle_hit_at(x, y, browser_win_y, browser_win_x + browser_win_w - 74u)) {
         return GUI_WINDOW_CONTROL_MAXIMIZE;
     }
 
@@ -268,60 +355,65 @@ void set_paint_minimized(uint8_t minimized) {
 }
 
 int paint_handle_click(uint64_t x, uint64_t y) {
-    uint64_t content_x;
-    uint64_t content_y;
-    uint64_t content_w;
-    uint64_t content_h;
     uint64_t canvas_x;
     uint64_t canvas_y;
     uint64_t canvas_w;
     uint64_t canvas_h;
-    static const uint8_t swatches[6][3] = {
-        { 18, 18, 22 }, { 255, 255, 255 }, { 224, 68, 88 },
-        { 72, 132, 248 }, { 64, 196, 128 }, { 255, 188, 72 }
-    };
+    uint64_t tx, ty, tw, th;
 
     if (!paint_active || paint_minimized) {
         return 0;
     }
 
-    paint_content_rect(&content_x, &content_y, &content_w, &content_h);
     paint_canvas_rect(&canvas_x, &canvas_y, &canvas_w, &canvas_h);
+    paint_toolbar_rect(&tx, &ty, &tw, &th);
 
-    if (y >= content_y + 12u && y < content_y + 32u) {
-        for (uint64_t i = 0; i < 6u; ++i) {
-            const uint64_t swatch_x = content_x + 220u + i * 28u;
-            if (x >= swatch_x && x < swatch_x + GUI_PAINT_SWATCH_SIZE) {
-                paint_color = pack_color(swatches[i][0], swatches[i][1], swatches[i][2]);
-                paint_eraser = 0u;
-                draw_paint_workspace();
-                return 1;
-            }
+    /* Toolbar floats over the canvas — check it first */
+    if (x >= tx && x < tx + tw && y >= ty && y < ty + th && th >= 500u) {
+        /* Eraser tool */
+        if (y >= ty + PT_TOOL_ERASER_Y - 16u && y < ty + PT_TOOL_ERASER_Y + 16u) {
+            paint_eraser = !paint_eraser;
+            draw_paint_toolbar();
+            return 1;
         }
-    }
-
-    if (x >= content_x + content_w - 196u && x < content_x + content_w - 140u &&
-        y >= content_y + 10u && y < content_y + 34u) {
-        paint_eraser = 1u;
-        draw_paint_workspace();
-        return 1;
-    }
-
-    if (x >= content_x + content_w - 132u && x < content_x + content_w - 80u &&
-        y >= content_y + 10u && y < content_y + 34u) {
-        paint_clear_canvas();
-        draw_paint_workspace();
-        return 1;
-    }
-
-    for (uint64_t i = 0; i < 3u; ++i) {
-        const uint64_t radius = i == 0u ? 2u : (i == 1u ? 4u : 7u);
-        const uint64_t button_x = content_x + content_w - 72u + i * 22u;
-        if (x >= button_x && x < button_x + 18u && y >= content_y + 10u && y < content_y + 34u) {
-            paint_brush_radius = radius;
+        /* Clear (trash) */
+        if (y >= ty + PT_TOOL_CLEAR_Y - 14u && y < ty + PT_TOOL_CLEAR_Y + 14u) {
+            paint_clear_canvas();
             draw_paint_workspace();
             return 1;
         }
+        /* Color wells */
+        for (uint64_t i = 0u; i < paint_palette_count; ++i) {
+            const uint64_t cy = ty + PT_COLORS_Y + i * PT_COLOR_PITCH;
+            if (y >= cy - 16u && y < cy + 16u) {
+                paint_color = pack_color(paint_palette[i][0], paint_palette[i][1], paint_palette[i][2]);
+                paint_eraser = 0u;
+                draw_paint_toolbar();
+                return 1;
+            }
+        }
+        /* "+" → add a preset color to the palette */
+        if (paint_palette_count < PAINT_PALETTE_MAX &&
+            y >= ty + paint_plus_y() - 6u && y < ty + paint_plus_y() + 20u) {
+            const uint64_t n = paint_palette_count - 3u;
+            paint_palette[paint_palette_count][0] = paint_palette_extras[n][0];
+            paint_palette[paint_palette_count][1] = paint_palette_extras[n][1];
+            paint_palette[paint_palette_count][2] = paint_palette_extras[n][2];
+            ++paint_palette_count;
+            draw_paint_toolbar();
+            return 1;
+        }
+        /* Brush sizes */
+        for (uint64_t i = 0u; i < 3u; ++i) {
+            const uint64_t radius = i == 0u ? 2u : (i == 1u ? 4u : 7u);
+            const uint64_t cy = ty + paint_sizes_y() + 16u + i * 36u;
+            if (y >= cy - 17u && y < cy + 17u) {
+                paint_brush_radius = radius;
+                draw_paint_toolbar();
+                return 1;
+            }
+        }
+        return 1;  /* click inside the palette never paints */
     }
 
     if (x >= canvas_x && x < canvas_x + canvas_w && y >= canvas_y && y < canvas_y + canvas_h) {
@@ -333,6 +425,40 @@ int paint_handle_click(uint64_t x, uint64_t y) {
     }
 
     return 0;
+}
+
+void paint_handle_hover(uint64_t x, uint64_t y) {
+    uint64_t tx, ty, tw, th;
+    int item = -1;
+
+    if (!paint_active || paint_minimized) {
+        return;
+    }
+    paint_toolbar_rect(&tx, &ty, &tw, &th);
+    if (th >= 500u && x >= tx && x < tx + tw && y >= ty && y < ty + th) {
+        if (y >= ty + PT_TOOL_ERASER_Y - 16u && y < ty + PT_TOOL_ERASER_Y + 16u) {
+            item = 0;
+        } else if (y >= ty + PT_TOOL_CLEAR_Y - 14u && y < ty + PT_TOOL_CLEAR_Y + 14u) {
+            item = 1;
+        } else if (paint_palette_count < PAINT_PALETTE_MAX &&
+                   y >= ty + paint_plus_y() - 6u && y < ty + paint_plus_y() + 20u) {
+            item = 50;
+        } else {
+            for (uint64_t i = 0u; i < paint_palette_count && item < 0; ++i) {
+                const uint64_t cy = ty + PT_COLORS_Y + i * PT_COLOR_PITCH;
+                if (y >= cy - 16u && y < cy + 16u) { item = 10 + (int)i; }
+            }
+            for (uint64_t i = 0u; i < 3u && item < 0; ++i) {
+                const uint64_t cy = ty + paint_sizes_y() + 16u + i * 36u;
+                if (y >= cy - 17u && y < cy + 17u) { item = 60 + (int)i; }
+            }
+        }
+    }
+
+    if (item != paint_hover_item) {
+        paint_hover_item = item;
+        draw_paint_toolbar();
+    }
 }
 
 void paint_continue_stroke(uint64_t x, uint64_t y) {
@@ -368,21 +494,7 @@ void gui_open_paint(void) {
         return;
     }
 
-    restore_mouse_cursor_background();
-    if (!terminal_minimized && active_pid == terminal_pid_value) {
-        save_terminal_snapshot();
+    if (elf_spawn("/home/root/bin/vex_paint") != 0) {
+        tty_puts("paint launch failed\n");
     }
-
-    paint_previous_browser = (browser_active && !browser_minimized) ? 1u : 0u;
-    if (paint_previous_browser) {
-        browser_minimized = 1u;
-    }
-    paint_previous_pid = active_pid;
-    active_pid = 0u;
-    paint_active = 1u;
-    paint_minimized = 0u;
-    paint_drawing = 0u;
-    render_active_app();
-    draw_taskbar_static();
-    gui_flush_scene_and_cursor();
 }

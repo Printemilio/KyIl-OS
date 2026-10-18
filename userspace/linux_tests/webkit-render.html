@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vex renderer test loading</title>
+<style>
+body { margin: 0; padding: 48px; background: #1a1a2e; color: #e0e0ff; font: 18px sans-serif; }
+h1 { font-size: 32px; }
+#box { width: 96px; height: 40px; background: #20d080; transform: translateX(0px); }
+canvas, img { border: 2px solid #ffffff; margin: 16px 24px 16px 0; }
+button, input, a { font: 20px sans-serif; padding: 12px; margin-right: 16px; }
+input { width: 220px; height: 28px; }
+button:hover { background: #ff8000; }
+input:focus { outline: 4px solid #20d080; }
+#interactions { position: sticky; top: 0; background: #1a1a2e; padding: 8px; }
+#scroll-space { height: 1600px; background: linear-gradient(#1a1a2e,#2040ff); }
+</style>
+<h1>WebKit real render regression</h1>
+<div id="interactions"><button id="clicker">Click me</button><input id="entry" placeholder="Type here"><a href="#bottom" id="link">Real link</a><p id="events">Events pending</p></div>
+<p id="state">Loading image and canvas...</p>
+<img id="image" width="96" height="96" alt="SVG image"
+src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect width='96' height='96' fill='%23ff8000'/%3E%3Ccircle cx='48' cy='48' r='32' fill='%232040ff'/%3E%3C/svg%3E">
+<canvas id="canvas" width="192" height="96"></canvas>
+<div id="box"></div>
+<div id="scroll-space"></div><p id="bottom">Bottom anchor</p>
+<script>
+const canvas = document.getElementById('canvas'), context = canvas.getContext('2d');
+const image = document.getElementById('image'), box = document.getElementById('box');
+let phase = 0, checksum = 0;
+let clicks=0,hover=0,focus=0,keys=0,mods=0,wheels=0,resize=0,moves=0,leave=0,wheelDelta=0;
+let pointerDown=0,pointerUp=0,mouseDown=0,mouseUp=0,lastPointer='none';
+let clickEvents=0,lastClick='none';
+function report() {
+    const status='click='+clicks+' allclick='+clickEvents+' lastClick='+lastClick+' hover='+hover+' pd='+pointerDown+' pu='+pointerUp+' md='+mouseDown+' mu='+mouseUp+' last='+lastPointer+' focus='+focus+' key='+keys+' mods='+mods+' wheel='+wheels+' delta='+wheelDelta+' scroll='+Math.round(scrollY)+' resize='+resize+' size='+innerWidth+'x'+innerHeight+' value='+document.getElementById('entry').value+' move='+moves+' leave='+leave;
+    document.getElementById('events').textContent=status;
+    document.title='VexInput:'+status;
+}
+document.getElementById('clicker').onclick=()=>{++clicks;report();};
+document.getElementById('clicker').onmouseenter=()=>{++hover;report();};
+document.addEventListener('click',e=>{++clickEvents;lastClick=e.target.tagName+'#'+e.target.id+':button='+e.button+':detail='+e.detail+':trusted='+e.isTrusted;report();},true);
+for(const type of ['pointerdown','pointerup','mousedown','mouseup'])document.addEventListener(type,e=>{
+    if(type==='pointerdown')++pointerDown;else if(type==='pointerup')++pointerUp;
+    else if(type==='mousedown')++mouseDown;else ++mouseUp;
+    lastPointer=type+':'+e.target.tagName+'#'+e.target.id+':button='+e.button+':buttons='+e.buttons+':xy='+e.clientX+','+e.clientY;
+    report();
+},true);
+document.getElementById('entry').onfocus=()=>{++focus;report();};
+document.getElementById('entry').oninput=report;
+document.addEventListener('keydown',e=>{++keys;mods+=(e.shiftKey||e.ctrlKey||e.altKey||e.metaKey)?1:0;report();});
+document.addEventListener('wheel',e=>{++wheels;wheelDelta=e.deltaY;report();});
+document.addEventListener('mousemove',()=>{++moves;report();});
+document.documentElement.addEventListener('mouseleave',()=>{++leave;report();});
+window.addEventListener('scroll',report);
+window.addEventListener('resize',()=>{++resize;report();});
+for (let i = 0; i < 12000; ++i) {
+    let x = i;
+    for (let j = 0; j < 8; ++j) x = (Math.imul(x, 1664525) + 1013904223) | 0;
+    checksum = (checksum + x) | 0;
+}
+function paint() {
+    ++phase;
+    context.fillStyle = phase % 2 ? '#20d080' : '#e020a0';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = '#ffffff'; context.fillRect(16, 16, 32, 32);
+    context.fillStyle = '#2040ff'; context.beginPath();
+    context.arc(128, 48, 24, 0, 2 * Math.PI); context.fill();
+    box.style.transform = 'translateX(' + ((phase % 8) * 16) + 'px)';
+    const loaded = image.complete && image.naturalWidth === 96;
+    document.getElementById('state').textContent = 'phase=' + phase + ' image=' + loaded + ' checksum=' + checksum;
+    report();
+}
+paint();
+setInterval(paint, 1000);
+</script>

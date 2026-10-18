@@ -1,0 +1,9 @@
+// A module that imports another one, and reads a constant of its own.
+
+import "geometry.suchu";
+
+pi = 3.14159;
+
+fun circle(radius) {
+  return pi * geometry.square(radius);
+}

@@ -1,0 +1,240 @@
+// Application-owned segmented piece table. Offsets are UTF-8 byte boundaries;
+// the UI exposes code-point/visual columns. No native editing helper.
+import textbytes;
+import fileio;
+import platform;
+import files;
+
+fun upper(values, n) {
+  lo = 0; hi = len(values);
+  while lo < hi { m = round(floor((lo + hi) / 2)); if values[m] <= n { lo = m + 1; } else { hi = m; } }
+  return lo;
+}
+fun chunk(text) {
+  positions = []; at = textbytes.find(text, "\n", 0);
+  while at >= 0 { push(positions, at); at = textbytes.find(text, "\n", at + 1); }
+  return [text, positions];
+}
+fun piece(d, source, start, count) {
+  lines = d.chunks[source][1];
+  return [source, start, count, upper(lines, start + count - 1) - upper(lines, start - 1)];
+}
+fun append_piece(out, p) {
+  if p[2] == 0 { return; }
+  if len(out) > 0 {
+    old = out[len(out) - 1];
+    if old[0] == p[0] && old[1] + old[2] == p[1] {
+      out[len(out) - 1] = [old[0], old[1], old[2] + p[2], old[3] + p[3]]; return;
+    }
+  }
+  push(out, p);
+}
+fun create(path, data) {
+  if !textbytes.valid_utf8(data) || data.contains(textbytes.character(0)) { textbytes.fail("File is not UTF-8 text"); }
+  d = { path: path; chunks: [chunk(data)]; add: -1; state: [[], len(data), 1, 0, 0, 0, [-1, -1], 0];
+    preferred: -1; top: 0; horizontal: 0; undo: []; redo: [];
+    serial: 0; saved: 0; eol: "\n"; caret_cache: [0, 0, 0, 0]; view_cache: []; };
+  if len(data) > 0 { push(d.state[0], piece(d, 0, 0, len(data))); d.state[2] = 1 + d.state[0][0][3]; }
+  n = textbytes.find(data, "\n", 0);
+  if n > 0 && data[n - 1] == "\r" { d.eol = "\r\n"; }
+  return d;
+}
+fun slice(d, from, count) {
+  out = ""; position = 0; stop = from + count;
+  for p in d.state[0] {
+    end = position + p[2];
+    if end > from && position < stop {
+      a = max(position, from); b = min(end, stop);
+      out = out @ textbytes.sub(d.chunks[p[0]][0], p[1] + a - position, b - a);
+    }
+    position = end;
+    if position >= stop { return out; }
+  }
+  return out;
+}
+fun snapshot(d) { return [d.state[0], d.state[1], d.state[2], d.state[3], d.state[4], d.state[5], [-1, -1], 0]; }
+fun restore(d, s) { d.state = s; d.preferred = -1; }
+fun mark_chunks(live, pieces) { for p in pieces { live[p[0]] = true; } }
+fun collect_chunks(d) {
+  live = []; for c in d.chunks { push(live, false); }
+  mark_chunks(live, d.state[0]);
+  for s in d.undo { mark_chunks(live, s[0]); } for s in d.redo { mark_chunks(live, s[0]); }
+  if d.add >= 0 { live[d.add] = true; }
+  i = 0; while i < len(live) { if !live[i] { d.chunks[i] = none; } i = i + 1; }
+}
+fun remember(d, state) {
+  push(d.undo, state); if len(d.undo) > 256 { remove(d.undo, 0); }
+  d.redo = [];
+  // Reclaim unreachable immutable segments, rather than retaining every old
+  // branch until the document closes. Walk metadata, never the text bytes.
+  if len(d.undo) == 256 && d.serial % 128 == 0 { collect_chunks(d); }
+}
+fun add_text(d, text) {
+  if d.add >= 0 && len(d.chunks[d.add][0]) + len(text) <= 4096 {
+    c = d.chunks[d.add]; old = len(c[0]); c[0] = c[0] @ text;
+    positions = chunk(text)[1]; for n in positions { push(c[1], old + n); }
+    return piece(d, d.add, old, len(text));
+  }
+  push(d.chunks, chunk(text)); d.add = len(d.chunks) - 1;
+  return piece(d, d.add, 0, len(text));
+}
+fun boundary(d, offset) {
+  if offset < 0 || offset > d.state[1] { return false; }
+  if offset == 0 || offset == d.state[1] { return true; }
+  b = textbytes.byte(slice(d, offset, 1), 0);
+  return !(b >= 128 && b < 192) && !(b == 10 && slice(d, offset - 1, 1) == "\r");
+}
+fun replace(d, at, removed, text, history) {
+  if at < 0 || removed < 0 || at + removed > d.state[1] { textbytes.fail("Edit range out of bounds"); }
+  if !textbytes.valid_utf8(text) || text.contains(textbytes.character(0)) { textbytes.fail("Invalid UTF-8 insertion"); }
+  if !boundary(d, at) || !boundary(d, at + removed) { textbytes.fail("Edit would split a UTF-8 character or CRLF"); }
+  if removed == len(text) && slice(d, at, removed) == text { return; }
+  if removed == 0 && len(text) == 0 { return; }
+  before = snapshot(d); inserted = if len(text) > 0 then add_text(d, text) else [0, 0, 0, 0];
+  out = []; position = 0; stop = at + removed; done = false;
+  for p in d.state[0] {
+    end = position + p[2];
+    if end <= at { append_piece(out, p); }
+    else if position >= stop {
+      if !done { append_piece(out, inserted); done = true; }
+      append_piece(out, p);
+    } else {
+      if position < at { append_piece(out, piece(d, p[0], p[1], at - position)); }
+      if !done { append_piece(out, inserted); done = true; }
+      if end > stop { append_piece(out, piece(d, p[0], p[1] + stop - position, end - stop)); }
+    }
+    position = end;
+  }
+  if !done { append_piece(out, inserted); }
+  if history { remember(d, before); }
+  new_lines = 1; for p in out { new_lines = new_lines + p[3]; }
+  next_serial = d.serial + 1;
+  state = [out, d.state[1] - removed + len(text), new_lines, at + len(text), at + len(text), next_serial, [at, d.state[5]], min(d.state[7], at)];
+  // Publish a complete metadata state at once; an allocation failure before
+  // publication cannot leave the piece table and its bounds inconsistent.
+  d.serial = next_serial; d.state = state; d.preferred = -1;
+}
+fun insert_text(d, text) { a = min(d.state[3], d.state[4]); replace(d, a, abs(d.state[3] - d.state[4]), text, true); }
+fun undo(d) { if len(d.undo) > 0 { push(d.redo, snapshot(d)); restore(d, pull(d.undo)); } }
+fun redo(d) { if len(d.redo) > 0 { push(d.undo, snapshot(d)); restore(d, pull(d.redo)); } }
+fun dirty(d) { return d.state[5] != d.saved; }
+fun next(d, offset) {
+  if offset >= d.state[1] { return d.state[1]; }
+  s = slice(d, offset, min(4, d.state[1] - offset));
+  if s.startswith("\r\n") { return offset + 2; }
+  return offset + textbytes.next(s, 0);
+}
+fun previous(d, offset) {
+  if offset <= 0 { return 0; }
+  start = max(0, offset - 4); s = slice(d, start, offset - start);
+  if s.endswith("\r\n") { return offset - 2; }
+  return start + textbytes.prev(s, len(s));
+}
+fun line_start(d, line) {
+  if line <= 0 { return 0; } if line >= d.state[2] { return d.state[1]; }
+  remaining = line; position = 0;
+  for p in d.state[0] {
+    if remaining <= p[3] {
+      offsets = d.chunks[p[0]][1]; first = upper(offsets, p[1] - 1);
+      return position + offsets[first + remaining - 1] - p[1] + 1;
+    }
+    remaining = remaining - p[3]; position = position + p[2];
+  }
+  return d.state[1];
+}
+fun line_at(d, offset) {
+  count = 0; position = 0;
+  for p in d.state[0] {
+    if position + p[2] <= offset { count = count + p[3]; }
+    else {
+      offsets = d.chunks[p[0]][1];
+      return count + upper(offsets, p[1] + offset - position - 1) - upper(offsets, p[1] - 1);
+    }
+    position = position + p[2];
+  }
+  return count;
+}
+fun line_end(d, row) {
+  end = if row + 1 < d.state[2] then line_start(d, row + 1) - 1 else d.state[1];
+  if end > line_start(d, row) && slice(d, end - 1, 1) == "\r" { end = end - 1; }
+  return end;
+}
+fun column(d, offset) {
+  row = line_at(d, offset); cache = d.caret_cache;
+  valid = cache[1] == row && (cache[3] == d.state[5] || (cache[3] == d.state[6][1] && cache[0] <= d.state[6][0]));
+  at = if valid then cache[0] else line_start(d, row); col = if valid then cache[2] else 0;
+  while at < offset { col = if slice(d, at, 1) == "\t" then (round(floor(col / 4)) + 1) * 4 else col + 1; at = next(d, at); }
+  while at > offset { at = previous(d, at); col = if slice(d, at, 1) == "\t" then round(floor((col - 1) / 4)) * 4 else col - 1; }
+  d.caret_cache = [offset, row, col, d.state[5]];
+  return col;
+}
+fun offset_at(d, row, col) {
+  cache = d.caret_cache; valid = cache[1] == row && cache[3] == d.state[5];
+  at = if valid then cache[0] else line_start(d, row); visual = if valid then cache[2] else 0; end = line_end(d, row);
+  while visual > col { at = previous(d, at); visual = if slice(d, at, 1) == "\t" then round(floor((visual - 1) / 4)) * 4 else visual - 1; }
+  while at < end && visual < col {
+    n = if slice(d, at, 1) == "\t" then (round(floor(visual / 4)) + 1) * 4 else visual + 1;
+    if n > col { return at; } visual = n; at = next(d, at);
+  }
+  return at;
+}
+fun clipped_start(d, row, col) {
+  for cache in d.view_cache {
+    if cache[0] == row && (cache[3] == d.state[5] || d.state[7] >= cache[1]) {
+      at = cache[1]; visual = cache[2]; end = line_end(d, row);
+      while visual > col { at = previous(d, at); visual = if slice(d, at, 1) == "\t" then round(floor((visual - 1) / 4)) * 4 else visual - 1; }
+      while at < end && visual < col { n = if slice(d, at, 1) == "\t" then (round(floor(visual / 4)) + 1) * 4 else visual + 1; if n > col { break; } visual = n; at = next(d, at); }
+      return [row, at, visual, d.state[5]];
+    }
+  }
+  at = offset_at(d, row, col); return [row, at, column(d, at), d.state[5]];
+}
+fun word_char(d, offset) {
+  if offset >= d.state[1] { return false; } b = textbytes.byte(slice(d, offset, 1), 0);
+  return b >= 128 || b == 95 || (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122);
+}
+fun word_next(d, offset) { at = offset; while at < d.state[1] && word_char(d, at) { at = next(d, at); } while at < d.state[1] && !word_char(d, at) { at = next(d, at); } return at; }
+fun word_previous(d, offset) { at = offset; while at > 0 && !word_char(d, previous(d, at)) { at = previous(d, at); } while at > 0 && word_char(d, previous(d, at)) { at = previous(d, at); } return at; }
+fun find(d, needle, start) {
+  if needle == "" { return -1; } position = 0;
+  for p in d.state[0] {
+    end = position + p[2];
+    if end > start {
+      from = p[1] + max(0, start - position);
+      result = textbytes.find(d.chunks[p[0]][0], needle, from);
+      if result >= 0 && result + len(needle) <= p[1] + p[2] { return position + result - p[1]; }
+      at = max(start, end - len(needle) + 1);
+      while at < end && at + len(needle) <= d.state[1] { if slice(d, at, len(needle)) == needle { return at; } at = next(d, at); }
+    }
+    position = end;
+  }
+  return -1;
+}
+fun read(path) {
+  fd = fileio.open(path, "r"); data = "";
+  try { block = fileio.read(fd, 65536); parts = [];
+    expected = fileio.size(fd); received = 0;
+    while block != "" { received = received + len(block); push(parts, block); block = fileio.read(fd, 65536); }
+    if received != expected || fileio.size(fd) != expected { textbytes.fail("File changed or ended unexpectedly during read"); }
+    fileio.close(fd); data = "".join(parts);
+  } else error { try { fileio.close(fd); } else ignored {} textbytes.fail(error.message); }
+  return create(path, data);
+}
+fun save(d, path) {
+  if path == "" { textbytes.fail("A destination path is required"); }
+  temp = path @ ".kyil-save-" @ platform.pid() @ "-" @ d.serial;
+  // Exclusive create: a collision is reported, never overwritten/retried.
+  mode = if files.exists(path) then fileio.mode(path) else 384;
+  fd = fileio.open(temp, "x"); closed = false;
+  try {
+    for p in d.state[0] { fileio.write(fd, textbytes.sub(d.chunks[p[0]][0], p[1], p[2])); }
+    fileio.sync(fd); fileio.close(fd); closed = true;
+    fileio.chmod(temp, mode);
+    fileio.rename(temp, path);
+  } else error {
+    if !closed { try { fileio.close(fd); } else ignored {} }
+    // Preserve the completed/recoverable temporary bytes on publication failure.
+    textbytes.fail("Save failed; original retained. Temporary: " @ temp @ " — " @ error.message);
+  }
+  d.path = path; d.saved = d.state[5];
+}

@@ -1,0 +1,19 @@
+import "terminal_model.suchu"; import textbytes;
+passed=0;
+fun check(ok,name) { if !ok { textbytes.fail("FAIL: " @ name); } passed=passed+1; }
+d=terminal_model.create(); terminal_model.feed(d,"hello\nworld");
+check(d.lines[0]=="hello" && d.lines[1]=="world","lines");
+terminal_model.feed(d,"\rW"); check(d.lines[1]=="World","CR overwrite");
+terminal_model.feed(d,textbytes.character(8) @ "!"); check(d.lines[1]=="!orld","backspace/overwrite");
+terminal_model.feed(d,textbytes.character(27) @ "[2"); terminal_model.feed(d,"J" @ textbytes.character(27) @ "[Hnew");
+check(len(d.lines)==1 && d.lines[0]=="new","clear split across reads");
+terminal_model.clear(d); terminal_model.feed(d,textbytes.sub("é",0,1)); terminal_model.feed(d,textbytes.sub("é",1,1));
+check(d.lines[0]=="é","UTF8 split across reads");
+terminal_model.remember(d,"top"); terminal_model.remember(d,"top"); terminal_model.remember(d,"help");
+check(len(d.history)==2,"history deduplication");
+check(terminal_model.previous(d,"draft")=="help","history previous");
+check(terminal_model.previous(d,"")=="top","history older");
+check(terminal_model.next(d)=="help" && terminal_model.next(d)=="draft","draft restoration");
+for i in 1..2200 { terminal_model.feed(d,"line\n"); }
+check(len(d.lines)==2048,"bounded scrollback");
+print("suchu-terminal-model: PASS " @ passed @ " checks");

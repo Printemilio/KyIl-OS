@@ -1,4 +1,5 @@
 #include <unos/boot_time.h>
+#include <unos/sched_clock.h>
 
 #include <stdint.h>
 
@@ -59,5 +60,7 @@ void boot_time_init(void) {
 
 uint64_t boot_time_ms(void) {
     const uint64_t elapsed = rdtsc() - boot_start_tsc;
+    uint64_t hz=sched_clock_frequency();
+    if(hz)return (elapsed/hz)*1000ull+(elapsed%hz)*1000ull/hz;
     return elapsed / (tsc_mhz * 1000ull);
 }

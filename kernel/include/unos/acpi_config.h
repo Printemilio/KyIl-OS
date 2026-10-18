@@ -1,0 +1,6 @@
+#ifndef KYIL_ACPI_CONFIG_H
+#define KYIL_ACPI_CONFIG_H
+#define UACPI_ARCH_FLUSH_CPU_CACHE() __asm__ volatile("wbinvd":::"memory")
+#define UACPI_DEFAULT_LOOP_TIMEOUT_SECONDS 5
+#define UACPI_DEFAULT_LOG_LEVEL UACPI_LOG_WARN
+#endif

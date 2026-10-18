@@ -1,0 +1,13 @@
+#version 450
+layout(local_size_x=4,local_size_y=2,local_size_z=1) in;
+layout(set=0,binding=0,rgba8) uniform image2DArray target;
+layout(set=0,binding=1,std430) buffer Result { uint words[]; } result;
+void main(){
+    ivec3 pos=ivec3(gl_GlobalInvocationID);
+    vec4 color=vec4(float(pos.x)/7.0,float(pos.y)/3.0,float(pos.z),1.0);
+    imageStore(target,pos,color);
+    memoryBarrierImage();
+    vec4 sampled=imageLoad(target,pos);
+    uint offset=uint(pos.x+8*(pos.y+4*pos.z));
+    result.words[offset]=uint(sampled.r*255.0+0.5);
+}

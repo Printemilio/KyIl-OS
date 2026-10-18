@@ -274,10 +274,52 @@ static uint32_t draw_text(uint32_t x, uint32_t y, uint32_t maxw, const char* tex
     return cy + line_height;
 }
 
+static uint32_t draw_text_limited(uint32_t x, uint32_t y, uint32_t maxw, uint32_t maxh, const char* text, uint32_t color, uint32_t scale)
+{
+    uint32_t cx = x;
+    uint32_t cy = y;
+    uint32_t step = 6u * scale;
+    uint32_t line_height = 9u * scale;
+    uint32_t glyph_width = 5u * scale;
+    const uint32_t bottom = y + maxh;
+    size_t i;
+
+    if (!text || maxh < line_height) {
+        return y;
+    }
+
+    for (i = 0; text[i] != '\0'; ++i) {
+        char value = text[i];
+        if (cy + line_height > bottom) {
+            break;
+        }
+        if (value == '\n') {
+            cx = x;
+            cy += line_height;
+            continue;
+        }
+        if (cx + glyph_width > x + maxw && cx > x) {
+            cx = x;
+            cy += line_height;
+            if (cy + line_height > bottom) {
+                break;
+            }
+        }
+        draw_char(cx, cy, value, color, scale);
+        cx += (value == ' ') ? 4u * scale : step;
+    }
+    return cy + line_height;
+}
+
 static int parse_fetch_url(const char* url, char* host, size_t host_capacity, char* path, size_t path_capacity, uint16_t* port)
 {
     const char* cursor = url;
     size_t host_length = 0;
+
+    while (*cursor != '\0' && *cursor <= ' ') {
+        ++cursor;
+    }
+
     if (string_starts_with_case_insensitive(cursor, "http://")) {
         cursor += 7;
         *port = 80;
@@ -288,7 +330,11 @@ static int parse_fetch_url(const char* url, char* host, size_t host_capacity, ch
         return -1;
     }
 
-    while (cursor[host_length] != '\0' && cursor[host_length] != '/' && cursor[host_length] != ':' && host_length + 1u < host_capacity) {
+    while (cursor[host_length] != '\0' &&
+        cursor[host_length] != '/' &&
+        cursor[host_length] != ':' &&
+        cursor[host_length] > ' ' &&
+        host_length + 1u < host_capacity) {
         host[host_length] = to_lower_ascii(cursor[host_length]);
         ++host_length;
     }
@@ -656,8 +702,12 @@ static void build_target_url(const char* command, char* url_out, size_t capacity
     const char* text = command;
     size_t length = 0;
 
-    if (string_starts_with(command, "load ")) text = command + 5u;
-    else if (string_starts_with(command, "navigate ")) text = command + 9u;
+    while (text != 0 && *text != '\0' && *text <= ' ') {
+        ++text;
+    }
+
+    if (string_starts_with(text, "load ")) text = text + 5u;
+    else if (string_starts_with(text, "navigate ")) text = text + 9u;
 
     if (string_starts_with_case_insensitive(text, "http://") || string_starts_with_case_insensitive(text, "https://")) {
         copy_string(url_out, capacity, text);
@@ -700,7 +750,7 @@ static void render_remote_page(void)
 
     fill(36u, 214u, 1208u, 378u, 0xfff5f7fcu);
     fill(36u, 214u, 1208u, 4u, 0xff28c4ffu);
-    draw_text(58u, 236u, 1160u, g_body[0] ? g_body : "No readable text extracted from the page.", 0xff1f2c3du, 1u);
+    draw_text_limited(58u, 236u, 1160u, 340u, g_body[0] ? g_body : "No readable text extracted from the page.", 0xff1f2c3du, 1u);
 }
 
 static void update_page_from_command(const char* command)

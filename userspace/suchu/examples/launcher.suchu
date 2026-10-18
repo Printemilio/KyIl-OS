@@ -1,0 +1,44 @@
+// Application selection/lifecycle in Suchu; native spawn/wait are OS bridges.
+import platform; import draw; import chrome;
+items=[["Terminal","/usr/bin/kyil-terminal",255],["Files","/usr/bin/kyil-files",0],
+       ["Editor","/usr/bin/kyil-editor",0],["Paint","/usr/bin/kyil-paint",0],["Browser","/usr/bin/kyil-browser",128]];
+children=[]; last_buttons=0; message="Launch a real native application";
+fun launch(index) {
+  try { pid=platform.spawn_caps(items[index][1],items[index][2]); push(children,[pid,items[index][0]]); message=items[index][0] @ " started (PID " @ pid @ ")"; }
+  else error { message=error.message; }
+}
+fun collect() {
+  i=0; while i<len(children) {
+    try {
+      status=platform.wait_child(children[i][0]);
+      if status[0]!=0 { message=children[i][1] @ " exited (" @ status[1] @ ")"; remove(children,i); }
+      else { i=i+1; }
+    } else error { message=error.message; i=i+1; }
+  }
+}
+fun paint() {
+  b=get_bounds(tiles); w=draw.width(); h=draw.height();
+  for e in platform.events() {
+    if e[0]==7 && e[1]==0 { last_buttons=0; }
+    if e[0]==5 {
+      held=e[1]%2==1; x=e[2]-b[0]; y=e[3]-b[1];
+      if held && last_buttons%2==0 && x>=10 && x<w-10 && y>=10 {
+        index=round(floor((y-10)/54)); if index>=0 && index<len(items) && y<10+index*54+44 { launch(index); }
+      }
+      last_buttons=e[1];
+    }
+  }
+  draw.clear(1184276);
+  for i in 0..(len(items)-1) {
+    y=10+i*54; draw.round_rect(10,y,w-20,44,5,2893109); draw.text(24,y+12,items[i][0],17,15658734);
+  }
+  set_text(status,message);
+}
+platform.install(false);
+Window("KyIl Applications",480px,400px) {
+  min-width: 280px; min-height: 370px; padding: 10px; spacing: 4px; layout: column; background: #121214; exit-key: "none";
+  Label { text: "Applications"; font-size: 22px; color: #aa88ff; height: 32px; }
+  Canvas { id: "tiles"; width: fill; height: fill; onDraw: { paint(); }; }
+  Label { id: "status"; width: fill; height: 32px; color: #bdb3ce; font-size: 12px; text: ""; }
+  Timer { interval: 1000ms; onTick: { if len(children)>0 { collect(); } }; }
+}

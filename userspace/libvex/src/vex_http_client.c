@@ -114,6 +114,10 @@ static int parse_fetch_url(const char* url, char* host, size_t host_capacity, ch
     const char* cursor = url;
     size_t host_length = 0;
 
+    while (*cursor != '\0' && *cursor <= ' ') {
+        ++cursor;
+    }
+
     if (string_starts_with_case_insensitive(cursor, "http://")) {
         cursor += 7;
         *port = 80;
@@ -127,6 +131,7 @@ static int parse_fetch_url(const char* url, char* host, size_t host_capacity, ch
     while (cursor[host_length] != '\0' &&
         cursor[host_length] != '/' &&
         cursor[host_length] != ':' &&
+        cursor[host_length] > ' ' &&
         host_length + 1u < host_capacity) {
         host[host_length] = to_lower_ascii(cursor[host_length]);
         ++host_length;
@@ -614,6 +619,13 @@ int vex_http_fetch_text(const char* url,
 
     __builtin_memset(&info, 0, sizeof(info));
     copy_string(current, sizeof(current), url);
+    while (current[0] != '\0' && current[0] <= ' ') {
+        size_t i = 0u;
+        do {
+            current[i] = current[i + 1u];
+            ++i;
+        } while (current[i - 1u] != '\0');
+    }
 
     for (attempt = 0; attempt < VEX_HTTP_MAX_REDIRECTS; ++attempt) {
         int result;

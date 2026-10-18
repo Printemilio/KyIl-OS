@@ -1,0 +1,3189 @@
+{
+  "format": 1,
+  "minor": 1,
+  "engine_min": 2,
+  "name": "e1000-82540em",
+  "platform": "pci.network",
+  "bus": "pci",
+  "class": "network",
+  "vendor": 32902,
+  "device": 4110,
+  "pci_class": 131072,
+  "priority": 90,
+  "features": [
+    "base",
+    "buffer",
+    "dma",
+    "mmio",
+    "irq"
+  ],
+  "irq": 11,
+  "scratch": 4096,
+  "resources": [
+    {
+      "kind": "mmio",
+      "length": 21512,
+      "rights": [
+        "read",
+        "write"
+      ],
+      "widths": 4
+    },
+    {
+      "kind": "dma",
+      "selector": 0,
+      "length": 65536,
+      "rights": [
+        "read",
+        "write"
+      ],
+      "widths": 15
+    },
+    {
+      "kind": "dma",
+      "selector": 1,
+      "length": 512,
+      "rights": [
+        "read",
+        "write"
+      ],
+      "widths": 15
+    },
+    {
+      "kind": "dma",
+      "selector": 2,
+      "length": 512,
+      "rights": [
+        "read",
+        "write"
+      ],
+      "widths": 15
+    }
+  ],
+  "entries": {
+    "probe": [
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 8
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 4294967295
+      },
+      {
+        "op": "eq",
+        "dst": 21,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "jz",
+        "a": 21,
+        "target": "valid"
+      },
+      {
+        "op": "ret",
+        "imm": -12
+      },
+      {
+        "label": "valid"
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "stop": [
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 4294967295
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 216
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 256
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 1024
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 67108864
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 0
+      },
+      {
+        "label": "reset"
+      },
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 0
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 67108864
+      },
+      {
+        "op": "and",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "jnz",
+        "a": 20,
+        "target": "reset"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 4294967295
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 216
+      },
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 192
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "init": [
+      {
+        "op": "const",
+        "dst": 0,
+        "imm": 0
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 65536
+      },
+      {
+        "op": "dma",
+        "aux": 1,
+        "dst": 16
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2048
+      },
+      {
+        "op": "store",
+        "dst": 16,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 0,
+        "imm": 0
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 65536
+      },
+      {
+        "op": "dma",
+        "aux": 1,
+        "dst": 17
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2056
+      },
+      {
+        "op": "store",
+        "dst": 17,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 0,
+        "imm": 2
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 512
+      },
+      {
+        "op": "dma",
+        "aux": 1,
+        "dst": 18
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2064
+      },
+      {
+        "op": "store",
+        "dst": 18,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 0,
+        "imm": 1
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 512
+      },
+      {
+        "op": "dma",
+        "aux": 1,
+        "dst": 19
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2072
+      },
+      {
+        "op": "store",
+        "dst": 19,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 24,
+        "imm": 0
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2080
+      },
+      {
+        "op": "store",
+        "dst": 24,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2088
+      },
+      {
+        "op": "store",
+        "dst": 24,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "label": "bind"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 11
+      },
+      {
+        "op": "shl",
+        "dst": 27,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 17
+      },
+      {
+        "op": "mov",
+        "dst": 2,
+        "a": 24
+      },
+      {
+        "op": "const",
+        "dst": 3,
+        "imm": 0
+      },
+      {
+        "op": "mov",
+        "dst": 4,
+        "a": 27
+      },
+      {
+        "op": "const",
+        "dst": 5,
+        "imm": 2048
+      },
+      {
+        "op": "dma",
+        "aux": 5,
+        "dst": 28
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 18
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 16
+      },
+      {
+        "op": "mov",
+        "dst": 2,
+        "a": 24
+      },
+      {
+        "op": "const",
+        "dst": 3,
+        "imm": 0
+      },
+      {
+        "op": "mov",
+        "dst": 4,
+        "a": 27
+      },
+      {
+        "op": "const",
+        "dst": 5,
+        "imm": 2048
+      },
+      {
+        "op": "dma",
+        "aux": 5,
+        "dst": 28
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "add",
+        "dst": 24,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 32
+      },
+      {
+        "op": "lt",
+        "dst": 20,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "jnz",
+        "a": 20,
+        "target": "bind"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 10256
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 14352
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 0
+      },
+      {
+        "op": "dma",
+        "aux": 6,
+        "dst": 28
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 18
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 1
+      },
+      {
+        "op": "dma",
+        "aux": 6,
+        "dst": 28
+      },
+      {
+        "op": "const",
+        "dst": 22,
+        "imm": 0
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 20
+      },
+      {
+        "label": "eeprom0"
+      },
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 20
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 16
+      },
+      {
+        "op": "and",
+        "dst": 21,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "jz",
+        "a": 21,
+        "target": "eeprom0"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 16
+      },
+      {
+        "op": "shr",
+        "dst": 21,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 65535
+      },
+      {
+        "op": "and",
+        "dst": 21,
+        "a": 21,
+        "b": 31
+      },
+      {
+        "op": "or",
+        "dst": 22,
+        "a": 22,
+        "b": 21
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 257
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 20
+      },
+      {
+        "label": "eeprom1"
+      },
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 20
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 16
+      },
+      {
+        "op": "and",
+        "dst": 21,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "jz",
+        "a": 21,
+        "target": "eeprom1"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 16
+      },
+      {
+        "op": "shr",
+        "dst": 21,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 65535
+      },
+      {
+        "op": "and",
+        "dst": 21,
+        "a": 21,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 16
+      },
+      {
+        "op": "shl",
+        "dst": 21,
+        "a": 21,
+        "b": 31
+      },
+      {
+        "op": "or",
+        "dst": 22,
+        "a": 22,
+        "b": 21
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 513
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 20
+      },
+      {
+        "label": "eeprom2"
+      },
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 20
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 16
+      },
+      {
+        "op": "and",
+        "dst": 21,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "jz",
+        "a": 21,
+        "target": "eeprom2"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 16
+      },
+      {
+        "op": "shr",
+        "dst": 21,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 65535
+      },
+      {
+        "op": "and",
+        "dst": 21,
+        "a": 21,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 32
+      },
+      {
+        "op": "shl",
+        "dst": 21,
+        "a": 21,
+        "b": 31
+      },
+      {
+        "op": "or",
+        "dst": 22,
+        "a": 22,
+        "b": 21
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 4294967295
+      },
+      {
+        "op": "and",
+        "dst": 20,
+        "a": 22,
+        "b": 31
+      },
+      {
+        "op": "write",
+        "a": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 21504
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 32
+      },
+      {
+        "op": "shr",
+        "dst": 20,
+        "a": 22,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 2147483648
+      },
+      {
+        "op": "or",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "write",
+        "a": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 21508
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 20992
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 20996
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21000
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21004
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21008
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21012
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21016
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21020
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21024
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21028
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21032
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21036
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21040
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21044
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21048
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21052
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21056
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21060
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21064
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21068
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21072
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21076
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21080
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21084
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21088
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21092
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21096
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21100
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21104
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21108
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21112
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21116
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21120
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21124
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21128
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21132
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21136
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21140
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21144
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21148
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21152
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21156
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21160
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21164
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21168
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21172
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21176
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21180
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21184
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21188
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21192
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21196
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21200
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21204
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21208
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21212
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21216
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21220
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21224
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21228
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21232
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21236
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21240
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21244
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21248
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21252
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21256
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21260
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21264
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21268
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21272
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21276
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21280
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21284
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21288
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21292
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21296
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21300
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21304
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21308
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21312
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21316
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21320
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21324
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21328
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21332
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21336
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21340
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21344
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21348
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21352
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21356
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21360
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21364
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21368
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21372
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21376
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21380
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21384
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21388
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21392
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21396
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21400
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21404
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21408
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21412
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21416
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21420
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21424
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21428
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21432
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21436
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21440
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21444
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21448
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21452
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21456
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21460
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21464
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21468
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21472
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21476
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21480
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21484
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21488
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21492
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21496
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 21500
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 6299658
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 1040
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 17039610
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 1024
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 67141694
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 256
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 6753
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 0
+      },
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 192
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 221
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 4,
+        "aux": 0,
+        "imm": 208
+      },
+      {
+        "op": "mov",
+        "dst": 8,
+        "a": 22
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "irq": [
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 192
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "control": [
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 8
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 2
+      },
+      {
+        "op": "and",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "shr",
+        "dst": 8,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "diagnostic": [
+      {
+        "op": "read",
+        "dst": 20,
+        "b": 4,
+        "aux": 0,
+        "imm": 8
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 2
+      },
+      {
+        "op": "and",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "shr",
+        "dst": 8,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "read",
+        "dst": 9,
+        "b": 4,
+        "aux": 0,
+        "imm": 10256
+      },
+      {
+        "op": "read",
+        "dst": 10,
+        "b": 4,
+        "aux": 0,
+        "imm": 10264
+      },
+      {
+        "op": "read",
+        "dst": 11,
+        "b": 4,
+        "aux": 0,
+        "imm": 256
+      },
+      {
+        "op": "read",
+        "dst": 12,
+        "b": 4,
+        "aux": 0,
+        "imm": 16544
+      },
+      {
+        "op": "read",
+        "dst": 13,
+        "b": 4,
+        "aux": 0,
+        "imm": 16400
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2072
+      },
+      {
+        "op": "load",
+        "dst": 19,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 14,
+        "imm": 0
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 0
+      },
+      {
+        "op": "dma",
+        "aux": 12,
+        "dst": 20
+      },
+      {
+        "op": "or",
+        "dst": 14,
+        "a": 14,
+        "b": 20
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 1
+      },
+      {
+        "op": "dma",
+        "aux": 12,
+        "dst": 20
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 8
+      },
+      {
+        "op": "shl",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "or",
+        "dst": 14,
+        "a": 14,
+        "b": 20
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 2
+      },
+      {
+        "op": "dma",
+        "aux": 12,
+        "dst": 20
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 16
+      },
+      {
+        "op": "shl",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "or",
+        "dst": 14,
+        "a": 14,
+        "b": 20
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 3
+      },
+      {
+        "op": "dma",
+        "aux": 12,
+        "dst": 20
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 24
+      },
+      {
+        "op": "shl",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "or",
+        "dst": 14,
+        "a": 14,
+        "b": 20
+      },
+      {
+        "op": "ret"
+      }
+    ],
+    "write": [
+      {
+        "op": "mov",
+        "dst": 25,
+        "a": 0
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2048
+      },
+      {
+        "op": "load",
+        "dst": 16,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2064
+      },
+      {
+        "op": "load",
+        "dst": 18,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2080
+      },
+      {
+        "op": "load",
+        "dst": 24,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 18
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 24
+      },
+      {
+        "op": "dma",
+        "aux": 10,
+        "dst": 28
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 11
+      },
+      {
+        "op": "shl",
+        "dst": 27,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 16
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 27
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 0
+      },
+      {
+        "op": "mov",
+        "dst": 3,
+        "a": 25
+      },
+      {
+        "op": "dma",
+        "aux": 8,
+        "dst": 28
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 4
+      },
+      {
+        "op": "shl",
+        "dst": 27,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 11
+      },
+      {
+        "op": "add",
+        "dst": 27,
+        "a": 27,
+        "b": 31
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 18
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 27
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 1
+      },
+      {
+        "op": "const",
+        "dst": 3,
+        "imm": 11
+      },
+      {
+        "op": "dma",
+        "aux": 4,
+        "dst": 28
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 18
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 24
+      },
+      {
+        "op": "mov",
+        "dst": 2,
+        "a": 25
+      },
+      {
+        "op": "dma",
+        "aux": 11,
+        "dst": 28
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "add",
+        "dst": 24,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 32
+      },
+      {
+        "op": "mod",
+        "dst": 24,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2080
+      },
+      {
+        "op": "store",
+        "dst": 24,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "read": [
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2056
+      },
+      {
+        "op": "load",
+        "dst": 17,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2072
+      },
+      {
+        "op": "load",
+        "dst": 19,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2088
+      },
+      {
+        "op": "load",
+        "dst": 24,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 24
+      },
+      {
+        "op": "dma",
+        "aux": 10,
+        "dst": 26
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 4
+      },
+      {
+        "op": "shl",
+        "dst": 27,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 12
+      },
+      {
+        "op": "add",
+        "dst": 27,
+        "a": 27,
+        "b": 31
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 27
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 1
+      },
+      {
+        "op": "dma",
+        "aux": 3,
+        "dst": 20
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 3
+      },
+      {
+        "op": "and",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 3
+      },
+      {
+        "op": "eq",
+        "dst": 20,
+        "a": 20,
+        "b": 31
+      },
+      {
+        "op": "jz",
+        "a": 20,
+        "target": "drop"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 4
+      },
+      {
+        "op": "shl",
+        "dst": 27,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 13
+      },
+      {
+        "op": "add",
+        "dst": 27,
+        "a": 27,
+        "b": 31
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 27
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 1
+      },
+      {
+        "op": "dma",
+        "aux": 3,
+        "dst": 20
+      },
+      {
+        "op": "jnz",
+        "a": 20,
+        "target": "drop"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "eq",
+        "dst": 20,
+        "a": 26,
+        "b": 31
+      },
+      {
+        "op": "jnz",
+        "a": 20,
+        "target": "drop"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1519
+      },
+      {
+        "op": "lt",
+        "dst": 20,
+        "a": 26,
+        "b": 31
+      },
+      {
+        "op": "jz",
+        "a": 20,
+        "target": "drop"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 11
+      },
+      {
+        "op": "shl",
+        "dst": 27,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 17
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 27
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 0
+      },
+      {
+        "op": "mov",
+        "dst": 3,
+        "a": 26
+      },
+      {
+        "op": "dma",
+        "aux": 9,
+        "dst": 28
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 24
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 2048
+      },
+      {
+        "op": "dma",
+        "aux": 11,
+        "dst": 28
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "add",
+        "dst": 24,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 32
+      },
+      {
+        "op": "mod",
+        "dst": 24,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2088
+      },
+      {
+        "op": "store",
+        "dst": 24,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "mov",
+        "dst": 8,
+        "a": 26
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      },
+      {
+        "label": "drop"
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 19
+      },
+      {
+        "op": "mov",
+        "dst": 1,
+        "a": 24
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 2048
+      },
+      {
+        "op": "dma",
+        "aux": 11,
+        "dst": 28
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "add",
+        "dst": 24,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 32
+      },
+      {
+        "op": "mod",
+        "dst": 24,
+        "a": 24,
+        "b": 31
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2088
+      },
+      {
+        "op": "store",
+        "dst": 24,
+        "a": 30,
+        "b": 8
+      },
+      {
+        "op": "ret",
+        "imm": -13
+      }
+    ]
+  },
+  "info": {
+    "description": "82540EM hardware protocol, interpreted; no native NIC delegate",
+    "descriptor_count": 32,
+    "buffer_capacity": 2048,
+    "normal_packet_max": 1518
+  }
+}

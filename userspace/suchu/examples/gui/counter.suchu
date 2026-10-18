@@ -1,0 +1,51 @@
+// A counter: global state, a shared helper, three buttons.
+// The window header carries title and size, and `layout` replaces the
+// wrapping column the older syntax needed.
+
+counter = 0;
+
+fun update_display() {
+  set_text(display, "Count: " @ counter);
+}
+
+Window("Counter", 320px, 220px) {
+  background: #1e1e1e;
+  layout: column;
+  spacing: 12px;
+  padding: 20px;
+
+  Label {
+    id: "display";
+    text: "Count: 0";
+    font-size: 20px;
+    color: #f0f2f5;
+  }
+
+  Row {
+    spacing: 8px;
+
+    Button {
+      text: "+1";
+      onClick: {
+        counter = counter + 1;
+        update_display();
+      };
+    }
+
+    Button {
+      text: "-1";
+      onClick: {
+        counter = counter - 1;
+        update_display();
+      };
+    }
+
+    Button {
+      text: "Reset";
+      onClick: {
+        counter = 0;
+        update_display();
+      };
+    }
+  }
+}

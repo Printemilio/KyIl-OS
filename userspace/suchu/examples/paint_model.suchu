@@ -1,0 +1,29 @@
+// Paint's bounded stamp document, in Suchu. No native paint implementation.
+fun whole(n) { return if n<0 then -round(floor(-n)) else round(floor(n)); }
+fun create() { return { stamps: []; color: 16711680; radius: 11; eraser: false; revision: 0; }; }
+fun clear(d) { d.stamps = []; d.revision=d.revision+1; }
+fun stamp(d, x, y) {
+  if len(d.stamps) >= 4096 || x < 0 || y < 0 || x >= 640 || y >= 360 { return; }
+  push(d.stamps, [x, y, d.radius, if d.eraser then 14277081 else d.color]);
+}
+fun stroke(d, x0, y0, x1, y1) {
+  dx = x1-x0; dy = y1-y0; steps = max(abs(dx),abs(dy));
+  if steps == 0 { stamp(d,x1,y1); return; }
+  for i in 0..steps { stamp(d,x0+whole(dx*i/steps),y0+whole(dy*i/steps)); }
+}
+fun checksum(d) {
+  h = 0;
+  for s in d.stamps { h = (h*33+s[0]+s[1]*641+s[2]*230400+s[3]) % 2147483647; }
+  return h;
+}
+// Benchmark trace is workload data, applied through the same document methods.
+fun replay(d, phase, frame) {
+  if frame == 0 && phase != 4 { clear(d); }
+  d.eraser = phase == 4;
+  d.color = if phase == 3 then 3678463 else if phase == 5 then 0 else 16711680;
+  d.radius = if phase == 3 then 18 else if phase == 5 then 5 else 11;
+  y = 40+frame*16;
+  if phase == 2 || phase == 4 { stroke(d,80,y,160,y+8); }
+  if phase == 3 { stroke(d,80,y,240,y); }
+  if phase == 5 { stroke(d,if frame%2 == 0 then 40 else 260,y,if frame%2 == 0 then 260 else 40,300-y); }
+}

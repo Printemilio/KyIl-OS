@@ -38,8 +38,9 @@ ladybird_fd_object_t* ladybird_fd_acquire(int fd) {
     return 0;
 }
 
-void ladybird_fd_release(ladybird_fd_object_t* object) {
+int ladybird_fd_release(ladybird_fd_object_t* object) {
     (void)object;
+    return 0;
 }
 
 int ladybird_fd_dup_object(int fd, int preferred_fd) {
@@ -213,6 +214,14 @@ int pipe2(int pipefd[2], int flags) {
     if ((flags & O_NONBLOCK) != 0) {
         (void)fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
         (void)fcntl(pipefd[1], F_SETFL, O_NONBLOCK);
+    }
+    if ((flags & O_CLOEXEC) != 0) {
+        if (fcntl(pipefd[0], F_SETFD, FD_CLOEXEC) != 0 ||
+            fcntl(pipefd[1], F_SETFD, FD_CLOEXEC) != 0) {
+            close(pipefd[0]);
+            close(pipefd[1]);
+            return -1;
+        }
     }
     return 0;
 }

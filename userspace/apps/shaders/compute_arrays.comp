@@ -1,0 +1,10 @@
+#version 450
+layout(local_size_x=4) in;
+layout(set=0,binding=0,std430) buffer B {uint values[];} outputs[2];
+layout(set=0,binding=1,rgba8) uniform image2D images[2];
+void main(){
+    uint b=gl_WorkGroupID.x;uint local=gl_LocalInvocationID.x;
+    outputs[b].values[local]=gl_GlobalInvocationID.x+100u;
+    atomicAdd(outputs[b].values[4],1u);
+    imageStore(images[b],ivec2(local,0),vec4(float(gl_GlobalInvocationID.x)/7.0,0.0,0.0,1.0));
+}

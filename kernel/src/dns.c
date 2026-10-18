@@ -1,3 +1,4 @@
+#include <unos/network_state.h>
 #include <unos/dns.h>
 
 #include <stddef.h>
@@ -7,20 +8,23 @@
 #include <unos/dhcp.h>
 #include <unos/ethernet.h>
 #include <unos/ipv4.h>
+#include <unos/irq.h>
+#include <unos/scheduler.h>
 #include <unos/udp.h>
 
 #define DNS_VBOX_NAT_IP 0x0a000203u
 #define DNS_VBOX_GATEWAY_IP 0x0a000202u
 #define DNS_SERVER_PORT 53u
 #define DNS_CLIENT_PORT 53053u
-#define DNS_QUERY_TIMEOUT 5000000u
-#define DNS_ARP_RETRY_POLLS 256u
+#define DNS_QUERY_TIMEOUT_TICKS 500u
+#define DNS_ARP_TIMEOUT_TICKS 500u
 #define DNS_MAX_PACKET_SIZE 512u
 #define DNS_TYPE_A 1u
 #define DNS_CLASS_IN 1u
 #define DNS_FLAG_QUERY_RECURSION_DESIRED 0x0100u
 #define DNS_FLAG_RESPONSE_MASK 0x8000u
 #define DNS_RCODE_MASK 0x000fu
+#define DNS_PENDING_QUERY_COUNT 16u
 
 typedef struct {
     uint16_t id;
@@ -31,13 +35,35 @@ typedef struct {
     uint16_t arcount;
 } __attribute__((packed)) dns_header_t;
 
-static uint16_t transaction_id = 0x554eu;
-static uint16_t pending_id;
-static uint32_t resolved_ip;
-static uint32_t active_dns_server;
-static int response_ready;
+typedef struct {
+    uint16_t id;
+    uint16_t reserved;
+    uint32_t server_ip;
+    uint32_t tid;
+    uint32_t ip;
+    volatile uint8_t done;
+    int8_t result;
+    uint8_t used;
+} dns_pending_query_t;
 
-static void debug_ipv4(uint32_t ip);
+static uint16_t transaction_id = 0x554eu;
+static dns_pending_query_t pending_queries[DNS_PENDING_QUERY_COUNT];
+
+static uint64_t dns_lock(void) {
+#ifdef VEX_NETWORK_HOST_TEST
+    return 0u;
+#else
+    return network_state_lock();
+#endif
+}
+
+static void dns_unlock(uint64_t flags) {
+#ifdef VEX_NETWORK_HOST_TEST
+    (void)flags;
+#else
+    network_state_unlock(flags);
+#endif
+}
 
 static uint16_t bswap16(uint16_t value) {
     return (uint16_t)((value << 8u) | (value >> 8u));
@@ -101,17 +127,21 @@ static int dns_string_equals_case_insensitive(const char *left, const char *righ
 }
 
 static int dns_cache_lookup(const char *hostname, uint32_t *ip) {
+    const uint64_t flags = dns_lock();
     for (size_t i = 0; i < dns_cache_count; ++i) {
         if (dns_string_equals_case_insensitive(dns_cache[i].hostname, hostname)) {
             *ip = dns_cache[i].ip;
+            dns_unlock(flags);
             return 0;
         }
     }
+    dns_unlock(flags);
     return -1;
 }
 
 static void dns_cache_store(const char *hostname, uint32_t ip) {
     if (string_length(hostname) >= 64u) return;
+    const uint64_t flags = dns_lock();
     size_t slot = dns_cache_count < DNS_CACHE_SIZE ? dns_cache_count++ : dns_cache_next_slot;
     const char *src = hostname;
     char *dst = dns_cache[slot].hostname;
@@ -122,22 +152,17 @@ static void dns_cache_store(const char *hostname, uint32_t ip) {
     if (dns_cache_count >= DNS_CACHE_SIZE) {
         dns_cache_next_slot = (dns_cache_next_slot + 1u) % DNS_CACHE_SIZE;
     }
+    dns_unlock(flags);
 }
 
 static int dns_static_resolve(const char *hostname, uint32_t *ip) {
     if (string_equals(hostname, "api.duckduckgo.com") || string_equals(hostname, "duckduckgo.com")) {
         *ip = (52u << 24u) | (142u << 16u) | (124u << 8u) | 215u;
-        debug_log_puts("dns: static api.duckduckgo.com -> ");
-        debug_ipv4(*ip);
-        debug_log_puts("\n");
         return 0;
     }
 
     if (string_equals(hostname, "en.wikipedia.org") || string_equals(hostname, "dyna.wikimedia.org")) {
         *ip = (185u << 24u) | (15u << 16u) | (58u << 8u) | 224u;
-        debug_log_puts("dns: static en.wikipedia.org -> ");
-        debug_ipv4(*ip);
-        debug_log_puts("\n");
         return 0;
     }
 
@@ -221,36 +246,6 @@ static uint32_t read_be32(const uint8_t *data) {
         | (uint32_t)data[3];
 }
 
-static void debug_u32(uint32_t value) {
-    char digits[10];
-    size_t count = 0;
-
-    if (value == 0u) {
-        debug_log_puts("0");
-        return;
-    }
-
-    while (value > 0u && count < sizeof(digits)) {
-        digits[count++] = (char)('0' + (value % 10u));
-        value /= 10u;
-    }
-
-    while (count > 0u) {
-        char digit[2] = { digits[--count], '\0' };
-        debug_log_puts(digit);
-    }
-}
-
-static void debug_ipv4(uint32_t ip) {
-    debug_u32((ip >> 24u) & 0xffu);
-    debug_log_puts(".");
-    debug_u32((ip >> 16u) & 0xffu);
-    debug_log_puts(".");
-    debug_u32((ip >> 8u) & 0xffu);
-    debug_log_puts(".");
-    debug_u32(ip & 0xffu);
-}
-
 static void dns_handle(uint32_t src_ip, uint16_t src_port, const void *data, size_t size) {
     if (src_port != DNS_SERVER_PORT || data == NULL || size < sizeof(dns_header_t)) {
         return;
@@ -258,17 +253,27 @@ static void dns_handle(uint32_t src_ip, uint16_t src_port, const void *data, siz
 
     const uint8_t *packet = data;
     const dns_header_t *header = data;
-    if (bswap16(header->id) != pending_id ||
-        (bswap16(header->flags) & DNS_FLAG_RESPONSE_MASK) == 0 ||
-        (bswap16(header->flags) & DNS_RCODE_MASK) != 0) {
+    const uint16_t id = bswap16(header->id);
+    const uint16_t response_flags = bswap16(header->flags);
+    if ((response_flags & DNS_FLAG_RESPONSE_MASK) == 0u) return;
+
+    uint64_t flags = dns_lock();
+    dns_pending_query_t *query = NULL;
+    for (size_t i = 0; i < DNS_PENDING_QUERY_COUNT; ++i) {
+        if (pending_queries[i].used && pending_queries[i].id == id &&
+            pending_queries[i].server_ip == src_ip) {
+            query = &pending_queries[i];
+            break;
+        }
+    }
+    if (query == NULL || query->done) { dns_unlock(flags); return; }
+    if ((response_flags & DNS_RCODE_MASK) != 0u) {
+        query->result = -1;
+        query->done = 1u;
+        process_wake(query->tid);
+        dns_unlock(flags);
         return;
     }
-
-    debug_log_puts("dns: response from ");
-    debug_ipv4(src_ip);
-    debug_log_puts(" expected ");
-    debug_ipv4(active_dns_server);
-    debug_log_puts("\n");
 
     size_t offset = sizeof(dns_header_t);
     const uint16_t qdcount = bswap16(header->qdcount);
@@ -276,6 +281,7 @@ static void dns_handle(uint32_t src_ip, uint16_t src_port, const void *data, siz
 
     for (uint16_t i = 0; i < qdcount; ++i) {
         if (skip_name(packet, size, &offset) != 0 || offset + 4u > size) {
+            dns_unlock(flags);
             return;
         }
         offset += 4u;
@@ -283,6 +289,7 @@ static void dns_handle(uint32_t src_ip, uint16_t src_port, const void *data, siz
 
     for (uint16_t i = 0; i < ancount; ++i) {
         if (skip_name(packet, size, &offset) != 0 || offset + 10u > size) {
+            dns_unlock(flags);
             return;
         }
 
@@ -292,17 +299,27 @@ static void dns_handle(uint32_t src_ip, uint16_t src_port, const void *data, siz
         offset += 10u;
 
         if (offset + rdlength > size) {
+            dns_unlock(flags);
             return;
         }
 
         if (type == DNS_TYPE_A && class_code == DNS_CLASS_IN && rdlength == 4u) {
-            resolved_ip = read_be32(&packet[offset]);
-            response_ready = 1;
+            query->ip = read_be32(&packet[offset]);
+            query->result = 0;
+            query->done = 1u;
+            process_wake(query->tid);
+            dns_unlock(flags);
             return;
         }
 
         offset += rdlength;
     }
+    /* A syntactically valid answer without an A record is a real negative
+     * result; do not leave the caller spinning until the global timeout. */
+    query->result = -1;
+    query->done = 1u;
+    process_wake(query->tid);
+    dns_unlock(flags);
 }
 
 static int wait_for_arp(uint32_t ip) {
@@ -322,41 +339,17 @@ static int wait_for_arp(uint32_t ip) {
         }
     }
 
-    (void)arp_request(next_hop);
-    for (uint32_t i = 0; i < DNS_QUERY_TIMEOUT; ++i) {
-        if (arp_lookup(next_hop, mac) == 0) {
-            return 0;
-        }
-        if ((i % DNS_ARP_RETRY_POLLS) == (DNS_ARP_RETRY_POLLS - 1u)) {
-            (void)arp_request(next_hop);
-        }
-        (void)ethernet_poll();
-    }
+    if (arp_wait_for(next_hop, mac, DNS_ARP_TIMEOUT_TICKS) == 0) return 0;
 
     if (next_hop != DNS_VBOX_GATEWAY_IP) {
-        debug_log_puts("dns: arp fallback gateway ");
-        debug_ipv4(DNS_VBOX_GATEWAY_IP);
-        debug_log_puts("\n");
-        (void)arp_request(DNS_VBOX_GATEWAY_IP);
-        for (uint32_t i = 0; i < DNS_QUERY_TIMEOUT; ++i) {
-            if (arp_lookup(DNS_VBOX_GATEWAY_IP, mac) == 0) {
-                return 0;
-            }
-            if ((i % DNS_ARP_RETRY_POLLS) == (DNS_ARP_RETRY_POLLS - 1u)) {
-                (void)arp_request(DNS_VBOX_GATEWAY_IP);
-            }
-            (void)ethernet_poll();
-        }
+        return arp_wait_for(DNS_VBOX_GATEWAY_IP, mac, DNS_ARP_TIMEOUT_TICKS);
     }
-
     return -1;
 }
 
 static int dns_resolve_with_server(const char *hostname, uint32_t server_ip, uint32_t *ip) {
     if (server_ip == 0u || wait_for_arp(server_ip) != 0) {
-        debug_log_puts("dns: arp/server unreachable ");
-        debug_ipv4(server_ip);
-        debug_log_puts("\n");
+        debug_log_puts("dns: arp/server unreachable\n");
         return -1;
     }
 
@@ -364,12 +357,20 @@ static int dns_resolve_with_server(const char *hostname, uint32_t server_ip, uin
     size_t offset = sizeof(dns_header_t);
     dns_header_t *header = (dns_header_t *)packet;
 
-    pending_id = transaction_id++;
-    resolved_ip = 0;
-    active_dns_server = server_ip;
-    response_ready = 0;
+    dns_pending_query_t *query = NULL;
+    uint64_t flags = dns_lock();
+    for (size_t i = 0; i < DNS_PENDING_QUERY_COUNT; ++i) {
+        if (!pending_queries[i].used) { query = &pending_queries[i]; break; }
+    }
+    if (query == NULL) { dns_unlock(flags); return -1; }
+    uint16_t id = transaction_id++;
+    if (transaction_id == 0u) transaction_id = 1u;
+    *query = (dns_pending_query_t){
+        .id=id, .server_ip=server_ip, .tid=scheduler_current_tid(), .used=1u
+    };
+    dns_unlock(flags);
 
-    header->id = bswap16(pending_id);
+    header->id = bswap16(id);
     header->flags = bswap16(DNS_FLAG_QUERY_RECURSION_DESIRED);
     header->qdcount = bswap16(1);
     header->ancount = 0;
@@ -377,7 +378,7 @@ static int dns_resolve_with_server(const char *hostname, uint32_t server_ip, uin
     header->arcount = 0;
 
     if (encode_qname(hostname, packet, &offset) != 0 || offset + 4u > sizeof(packet)) {
-        debug_log_puts("dns: encode failed\n");
+        flags = dns_lock(); *query = (dns_pending_query_t){0}; dns_unlock(flags);
         return -1;
     }
 
@@ -387,32 +388,25 @@ static int dns_resolve_with_server(const char *hostname, uint32_t server_ip, uin
     packet[offset++] = DNS_CLASS_IN;
 
     udp_register_handler(DNS_CLIENT_PORT, dns_handle);
-    debug_log_puts("dns: query ");
-    debug_log_puts(hostname);
-    debug_log_puts(" via ");
-    debug_ipv4(server_ip);
-    debug_log_puts("\n");
     if (udp_send(server_ip, DNS_CLIENT_PORT, DNS_SERVER_PORT, packet, offset) != 0) {
-        debug_log_puts("dns: udp_send failed\n");
+        flags = dns_lock(); *query = (dns_pending_query_t){0}; dns_unlock(flags);
         return -1;
     }
 
-    for (uint32_t i = 0; i < DNS_QUERY_TIMEOUT && !response_ready; ++i) {
-        (void)ethernet_poll();
+    const uint64_t start = scheduler_ticks_now();
+    const uint64_t deadline = DNS_QUERY_TIMEOUT_TICKS > UINT64_MAX - start
+        ? UINT64_MAX : start + DNS_QUERY_TIMEOUT_TICKS;
+    while (query->done == 0u) {
+        const uint64_t now = scheduler_ticks_now();
+        if (now >= deadline) break;
+        process_wait_event_timeout(&query->done, deadline - now);
     }
-
-    if (!response_ready) {
-        debug_log_puts("dns: timeout\n");
-        return -1;
-    }
-
-    *ip = resolved_ip;
-    debug_log_puts("dns: resolved ");
-    debug_log_puts(hostname);
-    debug_log_puts(" -> ");
-    debug_ipv4(resolved_ip);
-    debug_log_puts("\n");
-    return 0;
+    flags = dns_lock();
+    const int result = query->done != 0u ? query->result : -1;
+    if (result == 0) *ip = query->ip;
+    *query = (dns_pending_query_t){0};
+    dns_unlock(flags);
+    return result;
 }
 
 int dns_resolve(const char *hostname, uint32_t *ip) {
@@ -455,4 +449,12 @@ int dns_resolve(const char *hostname, uint32_t *ip) {
     }
 
     return -1;
+}
+
+void dns_thread_stopped(uint32_t tid) {
+    uint64_t flags=dns_lock();
+    for(unsigned i=0;i<DNS_PENDING_QUERY_COUNT;++i)
+        if(pending_queries[i].used && pending_queries[i].tid==tid)
+            pending_queries[i]=(dns_pending_query_t){0};
+    dns_unlock(flags);
 }

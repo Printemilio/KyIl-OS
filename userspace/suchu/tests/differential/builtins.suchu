@@ -1,0 +1,47 @@
+// Built-ins called by name. The compiler binds each one once and calls it
+// directly, which is only right while nothing in the program redefines it, so
+// this is mostly about the cases where something does.
+
+// Shadows the built-in of the same name.
+fun max(a, b) {
+  return "mine " @ a;
+}
+
+// A parameter named like a built-in is a different variable.
+fun shadow_param(len) {
+  return len + 1;
+}
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun main() {
+  show("max = ", max(1, 2));
+  show("min = ", min(3, 2));
+  show("len = ", len("hello"));
+  show("abs = ", abs(-4));
+  show("param = ", shadow_param(41));
+  show("round = ", round(2.6));
+
+  xs = [3, 1, 2];
+  push(xs, 9);
+  show("after push = ", xs);
+  show("type = ", type(xs));
+
+  // An error raised through a direct call is the same error.
+  try {
+    len(1, 2);
+  } else e {
+    print("caught: " @ e.message);
+  }
+
+  // A name that is not a built-in still fails where it is mentioned.
+  try {
+    nothing_of_this_name(1);
+  } else e {
+    print("caught: " @ e.message);
+  }
+}
+
+main();

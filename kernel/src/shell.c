@@ -10,6 +10,8 @@
 #include <unos/irq.h>
 #include <unos/keyboard.h>
 #include <unos/scheduler.h>
+#include <unos/console.h>
+#include <string.h>
 #include <unos/tty.h>
 #include <unos/users.h>
 
@@ -27,6 +29,15 @@ static size_t selection_end;
 static uint32_t shell_process_pid;
 static int shell_command_pipe = -1;
 static uint8_t shell_prompt_drawn;
+static volatile uint8_t shell_command_woken;
+static char submitted[SHELL_BUFFER_SIZE];
+static size_t submitted_size,submitted_at;
+
+static void shell_notify_command(void) {
+    const uint32_t pid = shell_process_pid;
+    shell_command_woken = 1u;
+    if (pid != 0u) process_wake(pid);
+}
 
 static size_t string_length(const char *str) {
     size_t length = 0;
@@ -54,8 +65,7 @@ static void copy_string(char *dst, const char *src, size_t capacity) {
 }
 
 static void prompt(void) {
-    tty_puts(user_current_username());
-    tty_puts("@Vex-OS> ");
+    tty_puts("KyIlOS $ ");
 }
 
 static int shell_try_next_key(char *out_key) {
@@ -64,7 +74,7 @@ static int shell_try_next_key(char *out_key) {
     while (pipe_read(shell_command_pipe, &command, sizeof(command)) == (int)sizeof(command)) {
         if (command.type == GUI_APP_CMD_CONFIGURE) {
             tty_set_region(command.x, command.y, command.w, command.h);
-            tty_set_colors_rgb(230, 236, 248, 12, 14, 22);
+            tty_set_colors_rgb(255, 255, 255, 20, 20, 20);
             tty_set_stream_output_enabled(command.flags != 0u && gui_terminal_surface_visible());
             if (command.flags == 0u) {
                 shell_prompt_drawn = 0u;
@@ -82,7 +92,17 @@ static int shell_try_next_key(char *out_key) {
         }
     }
 
+    {GUI_GUARD;
+     if(submitted_at<submitted_size){*out_key=submitted[submitted_at++];return 1;}}
     return 0;
+}
+int shell_submit_line(const char *text) {
+    GUI_GUARD;
+    size_t size=0;if(text)while(size<SHELL_BUFFER_SIZE && text[size])++size;
+    if(!shell_process_pid || !text || !size || size>=SHELL_BUFFER_SIZE-1)return -22;
+    if(submitted_at<submitted_size)return -16;
+    memcpy(submitted,text,size);submitted[size]='\n';submitted_at=0;submitted_size=size+1;
+    shell_notify_command();return 0;
 }
 
 static void shell_discard_pending_input(void) {
@@ -91,7 +111,7 @@ static void shell_discard_pending_input(void) {
     while (pipe_read(shell_command_pipe, &command, sizeof(command)) == (int)sizeof(command)) {
         if (command.type == GUI_APP_CMD_CONFIGURE) {
             tty_set_region(command.x, command.y, command.w, command.h);
-            tty_set_colors_rgb(230, 236, 248, 12, 14, 22);
+            tty_set_colors_rgb(255, 255, 255, 20, 20, 20);
             tty_set_stream_output_enabled(command.flags != 0u && gui_terminal_surface_visible());
             if (command.flags == 0u) {
                 shell_prompt_drawn = 0u;
@@ -205,30 +225,6 @@ void shell_execute_line(const char *line) {
     shell_prompt_drawn = 1u;
 }
 
-void shell_submit_line(const char *line) {
-    gui_app_command_t command;
-
-    if (line == NULL || shell_command_pipe < 0) {
-        return;
-    }
-
-    command.type = GUI_APP_CMD_KEY;
-    command.flags = 0u;
-    command.x = 0u;
-    command.y = 0u;
-    command.w = 0u;
-    command.h = 0u;
-    command.path[0] = '\0';
-
-    for (size_t i = 0; line[i] != '\0'; ++i) {
-        command.key = line[i];
-        (void)pipe_write(shell_command_pipe, &command, sizeof(command));
-    }
-
-    command.key = '\n';
-    (void)pipe_write(shell_command_pipe, &command, sizeof(command));
-}
-
 void shell_init(void) {
     history = kmalloc(sizeof(char *) * SHELL_HISTORY_DEPTH);
     if (history == NULL) {
@@ -250,6 +246,7 @@ void shell_init(void) {
         return;
     }
     shell_process_pid = process_create(shell_run, SHELL_PRIORITY);
+    if(shell_process_pid)scheduler_set_process_name(shell_process_pid,"native-shell");
 }
 
 uint32_t shell_pid(void) {
@@ -261,7 +258,9 @@ void shell_app_send(const gui_app_command_t *command) {
         return;
     }
 
-    (void)pipe_write(shell_command_pipe, command, sizeof(*command));
+    if (pipe_write(shell_command_pipe, command, sizeof(*command)) == (int)sizeof(*command)) {
+        shell_notify_command();
+    }
 }
 
 void shell_run(void) {
@@ -273,8 +272,12 @@ void shell_run(void) {
         for (;;) {
             char c = 0;
 
-            while (!shell_try_next_key(&c)) {
-                process_yield();
+            for (;;) {
+                /* Clear before draining: a message racing this point remains
+                   visible either in the pipe or in the armed wake flag. */
+                shell_command_woken = 0u;
+                if (shell_try_next_key(&c)) break;
+                process_wait_event(&shell_command_woken);
             }
 
             if (c == KEYBOARD_KEY_UP) {
@@ -322,7 +325,7 @@ void shell_run(void) {
                 break;
             }
 
-            if (c >= ' ') {
+            if ((unsigned char)c >= ' ') {
                 if (length + 1u >= SHELL_BUFFER_SIZE) {
                     tty_putchar('\n');
                     tty_puts("shell: command buffer full\n");
@@ -338,11 +341,13 @@ void shell_run(void) {
         }
 
         history_store(command_buffer);
+        console_command_begin();
         shell_execute_command(command_buffer);
         command_buffer[0] = '\0';
         shell_discard_pending_input();
         clear_selection();
         prompt();
+        console_command_ready();
         shell_prompt_drawn = 1u;
     }
 }

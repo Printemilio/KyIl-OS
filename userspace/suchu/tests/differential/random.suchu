@@ -1,0 +1,92 @@
+// The random module. What is checked is what has to hold whatever the numbers are:
+// a seed gives the same ones again, a die only ever shows one to six and shows all
+// six, a shuffle is a permutation and not a loss or a copy, and the errors say what
+// was wrong. The numbers themselves are printed only after a seed, which is the one
+// case where they are the same on every run, interpreted or compiled.
+
+import random;
+
+fun draw(count) {
+  out = [];
+  i = 0;
+  while (i < count) {
+    push(out, random.int(1, 1000));
+    i = i + 1;
+  }
+  return out;
+}
+
+fun attempt(label, f) {
+  try {
+    f();
+    print(label @ " -> no error");
+  } else e {
+    print(label @ " -> " @ e.message);
+  }
+}
+
+fun main() {
+  random.seed(2024);
+  first = draw(8);
+  random.seed(2024);
+  second = draw(8);
+  print("same seed, same numbers: " @ (first == second));
+  print("the numbers after seed 2024: " @ first);
+  random.seed(7);
+  print("another seed differs:    " @ (draw(8) != first));
+
+  // A die.
+  random.seed(1);
+  seen = [0, 0, 0, 0, 0, 0, 0];
+  inside = true;
+  i = 0;
+  while (i < 600) {
+    roll = random.int(1, 6);
+    if (roll < 1 || roll > 6) { inside = false; } else { seen[roll] = seen[roll] + 1; }
+    i = i + 1;
+  }
+  print("a die stays inside 1..6: " @ inside);
+  all_faces = true;
+  for face in 1 to 6 {
+    if (seen[face] == 0) { all_faces = false; }
+  }
+  print("and shows every face:    " @ all_faces);
+  print("one value:               " @ random.int(5, 5));
+
+  // Floats.
+  random.seed(3);
+  unit = true;
+  i = 0;
+  while (i < 200) {
+    f = random.float();
+    if (f < 0.0 || f >= 1.0) { unit = false; }
+    i = i + 1;
+  }
+  print("floats are in [0, 1):    " @ unit);
+
+  // Shuffle: the same elements, in place, returned as well.
+  random.seed(11);
+  deck = 1 to 20;
+  shuffled = random.shuffle(deck);
+  total = 0;
+  for card in deck { total = total + card; }
+  print("shuffle keeps 20 items:  " @ (len(deck) == 20));
+  print("and their sum:           " @ total);
+  print("in place and returned:   " @ (deck == shuffled));
+  print("and it moved something:  " @ (deck != (1 to 20)));
+  print("empty and single:        " @ random.shuffle([]) @ " " @ random.shuffle([9]));
+
+  // Choice.
+  random.seed(5);
+  names = ["a", "b", "c"];
+  picked = random.choice(names);
+  print("a choice is one of them: " @ (picked == "a" || picked == "b" || picked == "c"));
+
+  attempt("low above high   ", fun() { random.int(6, 1); });
+  attempt("a float for int  ", fun() { random.int(1, 2.5); });
+  attempt("choice of empty  ", fun() { random.choice([]); });
+  attempt("choice of text   ", fun() { random.choice("abc"); });
+  attempt("shuffle of a num ", fun() { random.shuffle(5); });
+}
+
+main();

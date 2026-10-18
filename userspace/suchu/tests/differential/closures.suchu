@@ -1,0 +1,95 @@
+// Function literals and what they capture. A Suchu closure reads the variable,
+// not a copy of it, so a change made after the closure was written is visible
+// through it. That is also true of the compiled form, because the closure holds
+// the same OCaml ref.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun make_counter() {
+  count = 0;
+  return fun() {
+    count = count + 1;
+    return count;
+  };
+}
+
+fun apply_twice(fn, value) {
+  return fn(fn(value));
+}
+
+fun compose(f, g) {
+  return fun(x) { return f(g(x)); };
+}
+
+fun main() {
+  // A literal used straight away.
+  double = fun(n) { return n * 2; };
+  show("double(4) = ", double(4));
+
+  // Passed to a builtin.
+  show("map = ", map(fun(n) { return n * n; }, [1, 2, 3]));
+  show("filter = ", filter(fun(n) { return n % 2 != 0; }, [1, 2, 3, 4, 5]));
+  show("reduce = ", reduce(fun(a, b) { return a + b; }, [1, 2, 3], 0));
+
+  // Passed to a Suchu function.
+  show("apply_twice = ", apply_twice(double, 3));
+  show("compose = ", compose(double, fun(n) { return n + 1; })(5));
+
+  // Each counter keeps its own state.
+  first = make_counter();
+  second = make_counter();
+  show("first  = ", first());
+  show("first  = ", first());
+  show("second = ", second());
+  show("first  = ", first());
+
+  // A closure reads the variable, so a later change shows through.
+  base = 10;
+  add_base = fun(n) { return n + base; };
+  show("with base 10 = ", add_base(1));
+  base = 100;
+  show("with base 100 = ", add_base(1));
+
+  // The loop variable is one binding reused, so closures made in a loop all
+  // end up seeing its last value.
+  makers = [];
+  for (n in 1..3) {
+    push(makers, fun() { return n; });
+  }
+  show("closures over the loop variable = ",
+       "" @ makers[0]() @ "," @ makers[1]() @ "," @ makers[2]());
+
+  // Immediately invoked, and returning a literal from a literal.
+  show("immediate = ", (fun(n) { return n + 1; })(41));
+  show("nested literal = ", (fun() { return fun() { return "inner"; }; })()());
+
+  // A literal with no return yields none.
+  show("no return = ", (fun() { x = 1; })());
+
+  // Recursion through a name in scope.
+  show("named recursion = ", countdown(4));
+
+  // ---------- prefix '@' ----------
+  queue = [1, 2, 3];
+  show("pulled = ", @queue);
+  show("after the pull = ", queue);
+  show("pulled again = ", @queue);
+  show("left = ", queue);
+
+  // '@' on a list built in place.
+  show("from a literal = ", @[7, 8, 9]);
+
+  // The postfix form appends.
+  bag = [1];
+  bag@2;
+  show("appended = ", bag);
+}
+
+fun countdown(n) {
+  if (n <= 0) { return "done"; }
+  return "" @ n @ " " @ countdown(n - 1);
+}
+
+main();

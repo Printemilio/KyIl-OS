@@ -2,7 +2,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <unos/mrac.h>
+#include <unos/named_content.h>
+#include <unos/kernel_guard.h>
+#include <stdio.h>
+#include <string.h>
 #include <unos/fs.h>
 #include <unos/tty.h>
 #include <unos/users.h>
@@ -13,9 +16,8 @@
 #define SPOTLIGHT_MAX_TITLE 64u
 #define SPOTLIGHT_MAX_DESCRIPTION 96u
 #define SPOTLIGHT_MAX_TAGS 96u
-#define SPOTLIGHT_PREF_PID 0x50524546u
-#define FNV1A_OFFSET_BASIS 14695981039346656037ull
-#define FNV1A_PRIME 1099511628211ull
+static named_content_map_t preferences;
+static kernel_gate_t preference_gate=KERNEL_GATE_INIT;
 
 typedef struct {
     char path[SPOTLIGHT_MAX_PATH];
@@ -55,13 +57,13 @@ static const char *active_query;
 static uint32_t preference_score(const char *path);
 
 static const spotlight_catalog_entry_t catalog[] = {
-    { "app:terminal", "Terminal", "Ouvrir une session shell", "terminal shell console commande", "Apps", SPOTLIGHT_RESULT_APP, SPOTLIGHT_ACTION_OPEN_TERMINAL, 0 },
-    { "app:fichiers", "Fichiers", "Ouvrir le gestionnaire de fichiers", "files fichiers explorer dossier", "Apps", SPOTLIGHT_RESULT_APP, SPOTLIGHT_ACTION_OPEN_FILES, 0 },
-    { "app:editeur", "Editeur", "Ouvrir l'editeur VexOS", "editor editeur texte note", "Apps", SPOTLIGHT_RESULT_APP, SPOTLIGHT_ACTION_OPEN_EDITOR, 0 },
-    { "app:navigateur", "Navigateur", "Ouvrir WebKit", "browser navigateur web webkit internet", "Apps", SPOTLIGHT_RESULT_APP, SPOTLIGHT_ACTION_OPEN_BROWSER, 0 },
-    { "cmd:sysinfo", "sysinfo", "Afficher resolution, RAM et processus", "system info memoire ram kernel", "Commandes", SPOTLIGHT_RESULT_COMMAND, SPOTLIGHT_ACTION_RUN_SYSINFO, 0 },
-    { "cmd:ps", "ps", "Lister les processus actifs", "process process list scheduler", "Commandes", SPOTLIGHT_RESULT_COMMAND, SPOTLIGHT_ACTION_RUN_PS, 0 },
-    { "cmd:log", "log", "Afficher les logs systeme recents", "syslog debug journal erreur", "Commandes", SPOTLIGHT_RESULT_COMMAND, SPOTLIGHT_ACTION_RUN_LOG, 0 }
+    { "app:terminal", "Terminal", "Open a shell session", "terminal shell console command", "Apps", SPOTLIGHT_RESULT_APP, SPOTLIGHT_ACTION_OPEN_TERMINAL, 0 },
+    { "app:files", "Files", "Open the Suchu file manager", "gfm files file manager explorer folder", "Apps", SPOTLIGHT_RESULT_APP, SPOTLIGHT_ACTION_OPEN_FILES, 0 },
+    { "app:editor", "Editor", "Open the KyIlOS editor", "editor text note", "Apps", SPOTLIGHT_RESULT_APP, SPOTLIGHT_ACTION_OPEN_EDITOR, 0 },
+    { "app:browser", "Browser", "Open WebKit", "browser web webkit internet", "Apps", SPOTLIGHT_RESULT_APP, SPOTLIGHT_ACTION_OPEN_BROWSER, 0 },
+    { "cmd:sysinfo", "sysinfo", "Show resolution, RAM, and processes", "system info memory ram kernel", "Commands", SPOTLIGHT_RESULT_COMMAND, SPOTLIGHT_ACTION_RUN_SYSINFO, 0 },
+    { "cmd:ps", "ps", "List active processes", "process process list scheduler", "Commands", SPOTLIGHT_RESULT_COMMAND, SPOTLIGHT_ACTION_RUN_PS, 0 },
+    { "cmd:log", "log", "Show recent system logs", "syslog debug journal error", "Commands", SPOTLIGHT_RESULT_COMMAND, SPOTLIGHT_ACTION_RUN_LOG, 0 }
 };
 
 static size_t string_length(const char *str) {
@@ -194,16 +196,7 @@ static uint32_t relevance_score(const spotlight_result_t *result) {
     return score;
 }
 
-static uint64_t fnv1a64_string(const char *str) {
-    uint64_t hash = FNV1A_OFFSET_BASIS;
 
-    for (size_t i = 0; str != NULL && str[i] != '\0'; ++i) {
-        hash ^= (uint8_t)str[i];
-        hash *= FNV1A_PRIME;
-    }
-
-    return hash;
-}
 
 static void copy_string(char *dst, size_t capacity, const char *src) {
     size_t i = 0;
@@ -348,6 +341,7 @@ static void copy_meta_value(char *dst, size_t capacity, const char *text, size_t
 }
 
 static void load_metadata(const char *path, char *title, size_t title_capacity, char *description, size_t description_capacity, char *tags, size_t tags_capacity) {
+    ora_view_t fs_lease_0 __attribute__((cleanup(ora_view_release)))={0};
     char meta_path[SPOTLIGHT_MAX_PATH];
     void *data = NULL;
     size_t size = 0;
@@ -355,7 +349,7 @@ static void load_metadata(const char *path, char *title, size_t title_capacity, 
     copy_string(meta_path, sizeof(meta_path), path);
     append_string(meta_path, sizeof(meta_path), ".meta");
 
-    if (fs_read(meta_path, &data, &size) != 0 || data == NULL) {
+    if (fs_read_view(meta_path,&data,&size, &fs_lease_0) != 0 || data == NULL) {
         return;
     }
 
@@ -391,45 +385,25 @@ static int result_matches(const spotlight_result_t *result) {
         contains_case_insensitive(result->tags, active_query);
 }
 
-static void preference_key(char *out, size_t capacity, const char *path) {
-    copy_string(out, capacity, "pref:");
-    append_string(out, capacity, user_current_username());
-    append_string(out, capacity, ":");
-    append_string(out, capacity, active_query);
-    append_string(out, capacity, ":");
-    append_string(out, capacity, path);
+static void preference_key(char *out,size_t capacity,const char *path) {
+    const char *user=user_current_username();
+    /* Length prefixes distinguish components even when queries contain ':'. */
+    snprintf(out,capacity,"%u:%s%u:%s%u:%s",(unsigned)string_length(user),user,
+        (unsigned)string_length(active_query),active_query,(unsigned)string_length(path),path);
 }
 
 static uint32_t preference_score(const char *path) {
-    char key[256];
-
-    preference_key(key, sizeof(key), path);
-    const uint64_t hash = fnv1a64_string(key);
-    uint32_t *score = MRAC_lookup(SPOTLIGHT_PREF_PID, hash);
-    if (score == NULL) {
-        return 0;
-    }
-
-    const uint32_t value = *score;
-    MRAC_release(SPOTLIGHT_PREF_PID, hash);
-    return value;
+    char key[384];preference_key(key,sizeof(key),path);
+    ora_ref_t content=named_content_acquire(&preferences,key);uint32_t score=0;
+    if(content && ora_size(content)==sizeof(score))memcpy(&score,ora_data(content),sizeof(score));
+    ora_release(content);return score;
 }
 
 static void preference_increment(const char *path) {
-    char key[256];
-    uint32_t score;
-
-    preference_key(key, sizeof(key), path);
-    const uint64_t key_hash = fnv1a64_string(key);
-    uint32_t *stored_score = MRAC_lookup(SPOTLIGHT_PREF_PID, key_hash);
-    if (stored_score != NULL) {
-        score = *stored_score + 1u;
-        MRAC_release(SPOTLIGHT_PREF_PID, key_hash);
-        MRAC_modify_with_hash(SPOTLIGHT_PREF_PID, key_hash, &score, sizeof(score));
-    } else {
-        score = 1u;
-        MRAC_store_with_hash(SPOTLIGHT_PREF_PID, key_hash, &score, sizeof(score));
-    }
+    KERNEL_GUARD(preference_gate);
+    char key[384];preference_key(key,sizeof(key),path);uint32_t score=preference_score(path);
+    if(score!=UINT32_MAX)++score;
+    (void)named_content_put(&preferences,key,&score,sizeof(score),NAMED_UPSERT);
 }
 
 static void insert_result(const spotlight_result_t *candidate) {
@@ -487,7 +461,7 @@ static void build_result_from_path(const char *path) {
     candidate.kind = candidate.program != 0 ? SPOTLIGHT_RESULT_APP : SPOTLIGHT_RESULT_FILE;
     candidate.action = candidate.program != 0 ? SPOTLIGHT_ACTION_RUN_PROGRAM : SPOTLIGHT_ACTION_OPEN_PATH;
     candidate.dangerous = 0;
-    copy_string(candidate.category, sizeof(candidate.category), candidate.program != 0 ? "Apps" : "Fichiers");
+    copy_string(candidate.category, sizeof(candidate.category), candidate.program != 0 ? "Apps" : "Files");
     candidate.score = relevance_score(&candidate);
     insert_result(&candidate);
 }

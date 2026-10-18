@@ -47,12 +47,13 @@ static int parse_offset(const char *text, size_t size, int8_t *out) {
 }
 
 void timezone_init(void) {
+    ora_view_t fs_lease_0 __attribute__((cleanup(ora_view_release)))={0};
     void *data = 0;
     size_t size = 0;
     int8_t parsed = 0;
 
     offset_hours = 0;
-    if (fs_read(TIMEZONE_PATH, &data, &size) == 0 && parse_offset(data, size, &parsed) == 0) {
+    if (fs_read_view(TIMEZONE_PATH,&data,&size, &fs_lease_0) == 0 && parse_offset(data, size, &parsed) == 0) {
         offset_hours = parsed;
     }
 }

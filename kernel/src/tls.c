@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
+#include <unos/random.h>
 #include <mbedtls/error.h>
 #include <mbedtls/platform.h>
 #include <mbedtls/ssl.h>
@@ -118,36 +119,11 @@ static void tls_free(void *ptr) {
     kfree(ptr);
 }
 
-static int rdrand64(uint64_t *value) {
-    uint8_t ok;
-
-    for (uint32_t i = 0; i < 16u; ++i) {
-        __asm__ volatile ("rdrand %0; setc %1" : "=r"(*value), "=qm"(ok) :: "cc");
-        if (ok != 0) {
-            return 0;
-        }
-    }
-
-    return -1;
-}
-
 int mbedtls_hardware_poll(void *data, unsigned char *output, size_t len, size_t *olen) {
     (void)data;
-
-    size_t written = 0;
-    while (written < len) {
-        uint64_t random = 0;
-        if (rdrand64(&random) != 0) {
-            *olen = written;
-            return -1;
-        }
-
-        for (size_t i = 0; i < sizeof(random) && written < len; ++i) {
-            output[written++] = (unsigned char)(random >> (i * 8u));
-        }
-    }
-
-    *olen = written;
+    *olen = 0;
+    if (kernel_random_try_fill(output,len) != 0) return -1;
+    *olen = len;
     return 0;
 }
 

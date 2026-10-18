@@ -1,0 +1,40 @@
+// Reading a variable beside a call that writes it. The left operand has to be
+// read first, because Suchu evaluates left to right; OCaml would read it after
+// the call had changed it. Both compilers used to disagree here without a test
+// to say so: the compiled program printed 15 where the interpreter printed 6.
+
+x = 1;
+
+fun bump() {
+  x = 10;
+  return 5;
+}
+
+fun reset() {
+  x = 1;
+}
+
+fun main() {
+  print(x + bump());
+  reset();
+  print(bump() + x);
+  reset();
+  print([x, bump()]);
+  reset();
+  print(x < bump());
+  reset();
+  print(x, bump());
+  reset();
+  print("v=" @ x @ bump());
+  reset();
+
+  lst = [1];
+  print("l=" @ lst @ grow(lst));
+}
+
+fun grow(target) {
+  push(target, 2);
+  return "!";
+}
+
+main();

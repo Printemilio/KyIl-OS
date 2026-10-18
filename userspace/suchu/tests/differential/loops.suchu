@@ -1,0 +1,100 @@
+// while, with break and continue at several depths. In the generated code
+// these travel as exceptions, so what matters is that each one is caught by
+// the right loop and not by an outer one.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun main() {
+  // A plain accumulation.
+  total = 0;
+  i = 1;
+  while (i <= 10) {
+    total = total + i;
+    i = i + 1;
+  }
+  show("sum 1..10 = ", total);
+  show("i after = ", i);
+
+  // continue skipping the even numbers.
+  odds = 0;
+  i = 0;
+  while (i < 10) {
+    i = i + 1;
+    if (i % 2 == 0) {
+      continue;
+    }
+    odds = odds + i;
+  }
+  show("sum of odds = ", odds);
+
+  // break out of the middle.
+  first = 0;
+  i = 1;
+  while (true) {
+    if (i * i > 50) {
+      first = i;
+      break;
+    }
+    i = i + 1;
+  }
+  show("first square over 50 = ", first);
+
+  // A loop that never runs.
+  never = "untouched";
+  while (false) {
+    never = "touched";
+  }
+  show("never = ", never);
+
+  // Nested, with break in the inner loop only: the outer one must keep going.
+  log = "";
+  outer = 1;
+  while (outer <= 3) {
+    inner = 1;
+    while (inner <= 3) {
+      if (inner == 2) {
+        break;
+      }
+      log = log @ outer @ ":" @ inner @ " ";
+      inner = inner + 1;
+    }
+    outer = outer + 1;
+  }
+  show("inner break = ", log);
+
+  // Nested, with continue in the inner loop.
+  log = "";
+  outer = 1;
+  while (outer <= 2) {
+    inner = 0;
+    while (inner < 4) {
+      inner = inner + 1;
+      if (inner == 2) {
+        continue;
+      }
+      log = log @ outer @ ":" @ inner @ " ";
+    }
+    outer = outer + 1;
+  }
+  show("inner continue = ", log);
+
+  // break inside an if inside a while inside a function, returning normally.
+  show("countdown = ", countdown(5));
+}
+
+fun countdown(from) {
+  out = "";
+  n = from;
+  while (n > 0) {
+    if (n == 2) {
+      break;
+    }
+    out = out @ n @ " ";
+    n = n - 1;
+  }
+  return out;
+}
+
+main();

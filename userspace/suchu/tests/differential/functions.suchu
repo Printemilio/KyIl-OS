@@ -1,0 +1,113 @@
+// Calls, recursion, mutual recursion, and the fact that a function can be
+// called from above its own definition. In the generated code every function
+// is a ref filled in after all the refs exist, which is what makes both the
+// mutual case and the call-from-above work.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun factorial(n) {
+  if (n <= 1) {
+    return 1;
+  }
+  return n * factorial(n - 1);
+}
+
+fun fib(n) {
+  if (n < 2) {
+    return n;
+  }
+  return fib(n - 1) + fib(n - 2);
+}
+
+fun is_even(n) {
+  if (n == 0) {
+    return true;
+  }
+  return is_odd(n - 1);
+}
+
+fun is_odd(n) {
+  if (n == 0) {
+    return false;
+  }
+  return is_even(n - 1);
+}
+
+// No return at all: the value is none.
+fun silent(n) {
+  x = n * 2;
+}
+
+// A bare return, which is also none.
+fun bare() {
+  return;
+}
+
+// Returning out of a loop out of a branch.
+fun find_divisor(n) {
+  d = 2;
+  while (d < n) {
+    if (n % d == 0) {
+      return d;
+    }
+    d = d + 1;
+  }
+  return n;
+}
+
+// Arguments are evaluated before the call, left to right.
+fun order(a, b, c) {
+  return "" @ a @ b @ c;
+}
+
+fun tick(label) {
+  print("  arg " @ label);
+  return label;
+}
+
+fun main() {
+  show("factorial(10) = ", factorial(10));
+  show("factorial(1) = ", factorial(1));
+  show("factorial(0) = ", factorial(0));
+
+  show("fib(15) = ", fib(15));
+  show("fib(0) = ", fib(0));
+
+  show("is_even(10) = ", is_even(10));
+  show("is_odd(10) = ", is_odd(10));
+  show("is_even(7) = ", is_even(7));
+
+  show("silent(4) = ", silent(4));
+  show("bare() = ", bare());
+
+  show("find_divisor(91) = ", find_divisor(91));
+  show("find_divisor(97) = ", find_divisor(97));
+
+  print("argument order:");
+  show("  order = ", order(tick("a"), tick("b"), tick("c")));
+
+  // A parameter is a local: assigning to it must not reach the caller's copy.
+  n = 5;
+  show("before = ", n);
+  show("doubled = ", doubles(n));
+  show("after = ", n);
+
+  // Deep enough to make the call sequence, not the loop, the thing measured.
+  show("depth(200) = ", depth(200));
+}
+
+fun doubles(n) {
+  n = n * 2;
+  return n;
+}
+
+fun depth(n) {
+  if (n == 0) {
+    return 0;
+  }
+  return 1 + depth(n - 1);
+}
+
+main();

@@ -1,0 +1,104 @@
+// Every widget added in 0.6, in one window.
+// Run it with:  suchu run examples/gui/widgets.suchu
+
+fun refresh() {
+  parts = [];
+  push(parts, "checkbox: " @ get_state(notify));
+  push(parts, "slider: " @ get_value(level));
+  set_text(readout, "   |   ".join(parts));
+}
+
+Window("Suchu widgets", 720px, 560px) {
+  background: #0b1020;
+  layout: column;
+  spacing: 12px;
+  padding: 20px;
+
+  Label {
+    text: "Widgets";
+    font-size: 26px;
+    font-weight: bold;
+    color: #f8fafc;
+  }
+
+  Tabs {
+
+    Tab {
+      title: "Text";
+
+      Text {
+        text: "Text shows several lines at once,\nwhich a single-line Input cannot do.\nIt is read-only.";
+        width: 560px;
+        height: 90px;
+      }
+
+      Html {
+        content: "Html adds <b>bold</b>, <em>italic</em> and <font color=\"#2ecc71\">colour</font>.";
+        width: 560px;
+        height: 44px;
+      }
+
+      Box { background: #334155; width: 560px; height: 1px; }
+
+      Label { text: "Box above is a one-pixel separator."; color: #94a3b8; font-size: 14px; }
+    }
+
+    Tab {
+      title: "Controls";
+
+      Checkbox {
+        id: "notify";
+        checked: true;
+        onChange: { refresh(); };
+      }
+      Label { text: "Send notifications"; color: #e2e8f0; }
+
+      Spacer { height: 12px; }
+
+      Slider {
+        id: "level";
+        max: 10;
+        value: 4;
+        width: 400px;
+        onChange: { refresh(); };
+      }
+
+      Select {
+        id: "theme";
+        selected: 0;
+        onChange: { set_text(readout, "theme: " @ event_value); };
+        Option { text: "Dark"; }
+        Option { text: "Light"; }
+        Option { text: "High contrast"; }
+      }
+
+      Label {
+        id: "readout";
+        text: "Interact with the controls above.";
+        color: #2ecc71;
+        font-size: 15px;
+      }
+    }
+
+    Tab {
+      title: "Scroll";
+
+      Scroll {
+        width: 560px;
+        height: 260px;
+
+        Label { text: "Scroll clips its children and adds a scrollbar."; color: #e2e8f0; }
+        Label { text: "row 1"; }
+        Label { text: "row 2"; }
+        Label { text: "row 3"; }
+        Label { text: "row 4"; }
+        Label { text: "row 5"; }
+        Label { text: "row 6"; }
+        Label { text: "row 7"; }
+        Label { text: "row 8"; }
+        Label { text: "row 9"; }
+        Label { text: "row 10"; }
+      }
+    }
+  }
+}

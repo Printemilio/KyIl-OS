@@ -1,0 +1,103 @@
+// Declared types: 'int n = 5;' holds n to an int from then on. The parser rewrites
+// the declaration and every assignment that follows it, so the interpreter and the
+// compiled program see the same tree. These check they also say the same thing.
+
+fun attempt(label, f) {
+  try {
+    f();
+    print(label @ " -> ok");
+  } else e {
+    print(label @ " -> " @ e.message);
+  }
+}
+
+total = 0;
+int counter = 0;
+
+fun bump() {
+  counter = counter + 1;
+}
+
+fun break_it() {
+  counter = "not a number";
+}
+
+fun main() {
+  // Every type, with a value that fits.
+  int a = 7;
+  float f = 2.5;
+  string s = "text";
+  char c = 'é';
+  bool b = true;
+  list xs = [1, 2, 3];
+  record r = { name: "x"; };
+  print(a, f, s, c, b, xs, r);
+
+  // An int widens into a float, and stays one.
+  float w = 1;
+  print(w);
+  w = 2;
+  print(w);
+
+  // The type stays with the variable.
+  attempt("int gets a string  ", fun() { a = "no"; });
+  attempt("int gets a float   ", fun() { a = 1.5; });
+  attempt("float gets a string", fun() { f = "no"; });
+  attempt("string gets an int ", fun() { s = 5; });
+  attempt("char gets two      ", fun() { c = "ab"; });
+  attempt("char gets none     ", fun() { c = ""; });
+  attempt("bool gets an int   ", fun() { b = 1; });
+  attempt("list gets a string ", fun() { xs = "no"; });
+  attempt("record gets a list ", fun() { r = [1]; });
+
+  // The declaration itself is checked too.
+  attempt("declared with wrong", fun() { int bad = "x"; });
+
+  // Arithmetic that stays inside the type is free.
+  int n = 0;
+  for i in 1 to 10 {
+    n = n + i;
+  }
+  print(n);
+  attempt("int times a float  ", fun() { n = n * 2.5; });
+
+  // A function assigning to a variable declared outside it is held to its type,
+  // and one that stays inside it is fine.
+  bump();
+  bump();
+  print(counter);
+  attempt("from a function    ", fun() { break_it(); });
+  print(counter);
+
+  // A parameter, a loop variable and a caught error of the same name are
+  // different variables: the outer type does not follow them in.
+  fun shadow(counter) {
+    counter = "free here";
+    return counter;
+  }
+  print(shadow(1));
+  for counter in 1 to 2 {
+    counter = "also free";
+  }
+  try { counter = "still held"; } else counter { counter = "free in the handler"; }
+  print(counter);
+
+  // A name declared in an inner block does not leak out of it.
+  if true {
+    int inner = 1;
+    inner = inner + 1;
+  }
+  inner = "a different variable out here";
+  print(inner);
+
+  // 'to' is still an ordinary name.
+  to = 3;
+  print(to + 1);
+
+  // An untyped variable is as free as it ever was.
+  loose = 1;
+  loose = "text";
+  print(loose);
+}
+
+main();

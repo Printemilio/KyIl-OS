@@ -1,0 +1,57 @@
+// Imports. A native module, a Suchu module with mutable state, a module that
+// imports another, and the same module reached twice.
+//
+// The mutable case is the one worth having: a module's top-level names have to
+// be one binding shared between the module's own functions and whoever imports
+// it, so 'counter.count' must follow 'counter.bump()'.
+
+import json;
+import system;
+import "modules/counter.suchu";
+import "modules/shapes.suchu";
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun main() {
+  // A native module.
+  show("json.encode = ", json.encode([1, true, "ok"]));
+  show("json.decode = ", json.decode("[1,2,3]"));
+  show("system.os is a string = ", type(system.os) == "string");
+
+  // A Suchu module: a constant, a function, and state that moves.
+  show("counter.label = ", counter.label);
+  show("counter.count = ", counter.count);
+  show("bump() = ", counter.bump());
+  show("bump() = ", counter.bump());
+  show("counter.count after = ", counter.count);
+  show("describe() = ", counter.describe());
+
+  // A module's field cannot be written from outside. Only reading follows.
+  try {
+    counter.count = 40;
+  } else e {
+    show("writing a module field: ", e.message);
+  }
+  show("still = ", counter.describe());
+
+  // A module that imports another and uses a constant of its own.
+  show("shapes.pi = ", shapes.pi);
+  show("shapes.circle(2) = ", shapes.circle(2));
+
+  // Reaching the inner module through the outer one's namespace is not a thing;
+  // importing it again here gives the same module, already run.
+  show("geometry through a second import = ", second_hand(3));
+
+  // A module value is a value: it can be held in a variable.
+  held = counter;
+  show("through a variable = ", held.count);
+}
+
+fun second_hand(n) {
+  import "modules/geometry.suchu";
+  return geometry.square(n);
+}
+
+main();

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Vex uses ELF x86-64 objects: the host binutils handle them unchanged.
+exec objcopy "$@"

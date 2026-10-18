@@ -1,0 +1,66 @@
+fun is_even(n) {
+  return n % 2 == 0;
+}
+
+fun parity_label(n) {
+  match n % 2 {
+    case 0 { return "even"; }
+    default { return "odd"; }
+  }
+}
+
+fun factorial(n) {
+  result = 1;
+  for (value in 1..n) {
+    result = result * value;
+  }
+  return result;
+}
+
+fun square(n) {
+  return n * n;
+}
+
+fun add(a, b) {
+  return a + b;
+}
+
+fun main() {
+  numbers = [2, 5, 7, 8, 10];
+  print("Numbers: " @ numbers);
+  print("Count: " @ Length.numbers);
+
+  squares = map(square, numbers);
+  print("Squares: " @ squares);
+
+  evens = filter(is_even, numbers);
+  print("Even numbers: " @ evens);
+
+  total = reduce(add, numbers);
+  print("Sum: " @ total);
+
+  numbers.reverse();
+  print("Reversed: " @ numbers);
+
+  removed = numbers.pop();
+  print("Removed last value: " @ removed);
+  print("After pop: " @ numbers);
+  print("Remaining sum: " @ numbers.sum());
+
+  abundance = if (Length.numbers > 3) then "plenty" else "just a few";
+  print("We currently have " @ abundance @ " numbers.");
+
+  phrase = "hello world from suchu";
+  tokens = phrase.split(" ");
+  title = " ".join(tokens);
+  print("Tokens: " @ tokens);
+  print("Title: " @ title.replace("suchu", "Suchu"));
+
+  for (value in evens) {
+    print("" @ value @ " is " @ parity_label(value));
+  }
+
+  print("5! = " @ factorial(5));
+}
+
+main();

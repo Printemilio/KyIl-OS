@@ -1,0 +1,95 @@
+// eval() runs a snippet in a room of its own: the built-ins that only compute,
+// plus whatever the caller chose to hand it, and nothing else.
+//
+// This is the one place a compiled program and an interpreted one could not
+// agree while eval ran in the caller's scope, because the caller's variables are
+// entries in an environment when interpreted and OCaml refs when compiled. With
+// nothing ambient to reach, there is nothing left to differ about -- which is
+// what this file is here to hold in place.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun main() {
+  // A formula, which is what eval is actually for.
+  show("2 + 3 * 4 = ", eval("2 + 3 * 4;"));
+  show("with brackets = ", eval("(2 + 3) * 4;"));
+  show("a float = ", eval("7 / 2;"));
+  show("a string = ", eval("\"a\" @ \"b\";"));
+  show("a comparison = ", eval("3 > 2;"));
+
+  // The pure built-ins are there, because a formula needs them.
+  show("sqrt = ", eval("sqrt(16);"));
+  show("min and max = ", eval("max(min(5, 3), 1);"));
+  show("round = ", eval("round(2.6);"));
+  show("a whole little program = ", eval("total = 0; i = 1; while (i <= 4) { total = total + i; i = i + 1; } total;"));
+
+  // The caller's variables are not visible.
+  hidden = 41;
+  try {
+    show("never printed ", eval("hidden + 1;"));
+  } else e {
+    show("cannot see the caller: ", e.message);
+  }
+
+  // Nor can a snippet reach the world.
+  try {
+    show("never printed ", eval("read_file(\"anything\");"));
+  } else e {
+    show("cannot read a file: ", e.message);
+  }
+  try {
+    show("never printed ", eval("print(\"from inside\");"));
+  } else e {
+    show("cannot print: ", e.message);
+  }
+  try {
+    show("never printed ", eval("import json; 1;"));
+  } else e {
+    show("cannot import: ", e.message);
+  }
+
+  // A name the snippet makes up stays behind.
+  eval("invented = 5;");
+  try {
+    show("never printed ", invented);
+  } else e {
+    show("what it made up stays inside: ", e.message);
+  }
+
+  // What the caller hands over, the snippet may read and write. A record is one
+  // shared value in both modes, so this is the way back out.
+  knobs = { speed: 1.0; gravity: 9.8; name: "player"; };
+  show("before = ", knobs);
+  eval("speed = speed * 2; gravity = gravity - 0.8;", knobs);
+  show("after = ", knobs);
+  show("speed = ", knobs.speed);
+  show("gravity = ", knobs.gravity);
+  show("untouched = ", knobs.name);
+
+  // Reading an exposed value without writing it.
+  reading = { base: 10; };
+  show("computed from it = ", eval("base * base;", reading));
+  show("still = ", reading.base);
+
+  // A name the snippet invents alongside an exposed one is not added.
+  small = { kept: 1; };
+  eval("kept = 2; discarded = 3;", small);
+  show("record after = ", small);
+  show("len = ", len(small));
+
+  // The formula an application would actually run.
+  show("user formula = ", calculate("(3 + 4) * 2 - 1"));
+  show("bad formula = ", calculate("3 +"));
+}
+
+fun calculate(text) {
+  try {
+    return eval(text @ ";");
+  } else e {
+    return "could not read that: " @ e.message;
+  }
+}
+
+main();

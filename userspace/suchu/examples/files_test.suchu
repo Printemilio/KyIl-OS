@@ -1,0 +1,40 @@
+import "files_model.suchu"; import fileio; import files; import platform; import textbytes;
+passed=0;
+fun check(ok,message) { if !ok { textbytes.fail("FAIL: " @ message); } passed=passed+1; }
+root="/tmp/suchu-files-test-" @ platform.pid(); fileio.mkdir(root,448);
+check(files_model.resolve("/home/root","../root/a/./b/../c")=="/home/root/a/c","canonical paths");
+check(files_model.parent("/")=="/","root parent");
+check(!files_model.within("/ab","/a"),"component boundary");
+bad=false; try { files_model.name("../x"); } else error { bad=true; }
+check(bad,"reject path as name");
+bad=false; try { files_model.resolve("/","x" @ textbytes.character(0)); } else error { bad=true; }
+check(bad,"reject NUL");
+folder=files_model.create(root,"nested"); files.write(folder @ "/é space.txt","héllo\n");
+files.write(root @ "/Alpha.txt",""); files.write(root @ "/zeta.txt","last");
+listing=files_model.list(root); check(listing[0].name=="nested" && listing[1].name=="Alpha.txt","folders first/name order");
+check(fileio.stat(root @ "/Alpha.txt")[1]==0,"empty real file");
+copy=files_model.copy(folder,root); check(copy==root @ "/nested copy","copy collision name");
+check(files.read(copy @ "/é space.txt")=="héllo\n","tree exact readback");
+check(files_model.count(copy,0)==1,"descendant count");
+second=files_model.copy(folder,root); check(second==root @ "/nested copy 2","second collision name");
+bad=false; try { files_model.copy(folder,folder); } else error { bad=true; }
+check(bad && files.read(folder @ "/é space.txt")=="héllo\n","reject copying into itself");
+renamed=files_model.rename(second,"Renamed"); check(!fileio.exists(second) && fileio.exists(renamed @ "/é space.txt"),"directory rename");
+destination=files_model.create(root,"destination"); moved=files_model.move(renamed,destination);
+check(!fileio.exists(renamed) && files.read(moved @ "/é space.txt")=="héllo\n","directory move");
+bad=false; try { files_model.rename(root @ "/zeta.txt","Alpha.txt"); } else error { bad=true; }
+check(bad && files.read(root @ "/zeta.txt")=="last" && files.read(root @ "/Alpha.txt")=="","no overwrite");
+parts=[]; for i in 1..9000 { push(parts,"0123456789abcdef\n"); }
+payload="".join(parts); files.write(root @ "/large.bin",payload);
+large=files_model.copy(root @ "/large.bin",destination); check(files.read(large)==payload,"153000 bytes across partial IO chunks");
+mode=fileio.stat(large)[2]; files_model.toggle_executable(large);
+check(files_model.executable(fileio.stat(large)[2]),"set executable");
+files_model.toggle_executable(large); check(!files_model.executable(fileio.stat(large)[2]),"clear executable");
+fileio.symlink(folder,root @ "/link"); link=files_model.copy(root @ "/link",destination);
+check(fileio.stat(link)[0]=="link" && fileio.readlink(link)==folder,"symlink copied as link");
+files_model.erase(link); check(files.read(folder @ "/é space.txt")=="héllo\n","unlink does not follow link");
+files.write(root @ "/binary",textbytes.character(0)); check(files_model.binary(root @ "/binary"),"binary probe");
+bad=false; try { files_model.erase("/"); } else error { bad=true; }
+check(bad,"root deletion refused");
+files_model.erase(root); check(!fileio.exists(root),"recursive cleanup");
+print("suchu-files: PASS " @ passed @ " real filesystem and policy checks");

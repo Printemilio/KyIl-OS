@@ -1,0 +1,98 @@
+.text
+.global wr_capture_context
+.type wr_capture_context,@function
+wr_capture_context:
+    mov %rax,0x78(%rcx)
+    mov %rcx,0x80(%rcx)
+    mov %rdx,0x88(%rcx)
+    mov %rbx,0x90(%rcx)
+    mov %rbp,0xa0(%rcx)
+    mov %rsi,0xa8(%rcx)
+    mov %rdi,0xb0(%rcx)
+    mov %r8,0xb8(%rcx)
+    mov %r9,0xc0(%rcx)
+    mov %r10,0xc8(%rcx)
+    mov %r11,0xd0(%rcx)
+    mov %r12,0xd8(%rcx)
+    mov %r13,0xe0(%rcx)
+    mov %r14,0xe8(%rcx)
+    mov %r15,0xf0(%rcx)
+    lea 8(%rsp),%rax
+    mov %rax,0x98(%rcx)
+    mov (%rsp),%rax
+    mov %rax,0xf8(%rcx)
+    pushfq
+    pop %rax
+    mov %eax,0x44(%rcx)
+    movw %cs,0x38(%rcx)
+    movw %ds,0x3a(%rcx)
+    movw %es,0x3c(%rcx)
+    movw %fs,0x3e(%rcx)
+    movw %gs,0x40(%rcx)
+    movw %ss,0x42(%rcx)
+    fxsave64 0x100(%rcx)
+    stmxcsr 0x34(%rcx)
+    movl $0x10000b,0x30(%rcx)
+    xor %eax,%eax
+    mov %rax,0(%rcx)
+    mov %rax,8(%rcx)
+    mov %rax,16(%rcx)
+    mov %rax,24(%rcx)
+    mov %rax,32(%rcx)
+    mov %rax,40(%rcx)
+    mov %rax,0x48(%rcx)
+    mov %rax,0x50(%rcx)
+    mov %rax,0x58(%rcx)
+    mov %rax,0x60(%rcx)
+    mov %rax,0x68(%rcx)
+    mov %rax,0x70(%rcx)
+    ret
+.global wr_capture_backtrace
+.type wr_capture_backtrace,@function
+wr_capture_backtrace:
+    sub $0x5c8,%rsp
+    mov %rcx,0(%rsp)
+    mov %rdx,8(%rsp)
+    mov %r8,16(%rsp)
+    mov %r9,24(%rsp)
+    mov %rdi,32(%rsp)
+    mov %rsi,40(%rsp)
+    movdqu %xmm6,48(%rsp)
+    movdqu %xmm7,64(%rsp)
+    movdqu %xmm8,80(%rsp)
+    movdqu %xmm9,96(%rsp)
+    movdqu %xmm10,112(%rsp)
+    movdqu %xmm11,128(%rsp)
+    movdqu %xmm12,144(%rsp)
+    movdqu %xmm13,160(%rsp)
+    movdqu %xmm14,176(%rsp)
+    movdqu %xmm15,192(%rsp)
+    stmxcsr 208(%rsp)
+    lea 0xf0(%rsp),%rcx
+    call wr_capture_context
+    mov 0x5c8(%rsp),%rax
+    mov %rax,0x1e8(%rsp)
+    lea 0x5d0(%rsp),%rax
+    mov %rax,0x188(%rsp)
+    lea 0xf0(%rsp),%rdi
+    mov 0(%rsp),%esi
+    mov 8(%rsp),%edx
+    mov 16(%rsp),%rcx
+    mov 24(%rsp),%r8
+    call wr_walk_backtrace
+    movdqu 48(%rsp),%xmm6
+    movdqu 64(%rsp),%xmm7
+    movdqu 80(%rsp),%xmm8
+    movdqu 96(%rsp),%xmm9
+    movdqu 112(%rsp),%xmm10
+    movdqu 128(%rsp),%xmm11
+    movdqu 144(%rsp),%xmm12
+    movdqu 160(%rsp),%xmm13
+    movdqu 176(%rsp),%xmm14
+    movdqu 192(%rsp),%xmm15
+    ldmxcsr 208(%rsp)
+    mov 32(%rsp),%rdi
+    mov 40(%rsp),%rsi
+    add $0x5c8,%rsp
+    ret
+.section .note.GNU-stack,"",@progbits

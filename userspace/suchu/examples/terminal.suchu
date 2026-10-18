@@ -1,0 +1,82 @@
+import "terminal_model.suchu";
+import platform; import draw; import chrome; import textbytes;
+import clipboard;
+d=terminal_model.create(); attached=false; busy=false; notice=""; rows=18; columns=80;
+cached_revision=-1; cached_columns=-1; visual=[];
+fun submit() {
+  text=get_text(command);
+  if busy { notice="A native command is still running"; return; }
+  if text.trim()=="" { return; }
+  try {
+    platform.console_submit(text); terminal_model.remember(d,text);
+    set_text(command,""); busy=true; d.follow=true; notice="Executing native command";
+  } else error { notice=error.message; }
+}
+fun pump() {
+  if !attached {
+    try { if !platform.console_attach() { chrome.close(); return; } attached=true; focus(command); }
+    else error { notice=error.message; return; }
+  }
+  for i in 0..15 {
+    result=platform.console_read(); was_busy=busy; busy=result[1]%2==1;
+    if was_busy && !busy { notice=""; if platform.focused() { focus(command); } }
+    if round(floor(result[1]/2))%2==1 { terminal_model.feed(d,"\n[Console output exceeded its 64 KiB queue; oldest bytes lost]\n"); }
+    terminal_model.feed(d,result[0]); if len(result[0])==0 { break; }
+  }
+}
+fun paint() {
+  try { pump(); } else error { notice=error.message; }
+  bounds=get_bounds(output);
+  for e in platform.events() {
+    if e[0]==6 && e[1]%2==1 {
+      if e[3]==200 && is_focused(command) { set_text(command,terminal_model.previous(d,get_text(command))); }
+      if e[3]==208 && is_focused(command) { set_text(command,terminal_model.next(d)); }
+      if e[3]==201 { d.follow=false; d.top=max(0,d.top-rows); }
+      if e[3]==209 { d.top=d.top+rows; }
+    }
+    if e[0]==5 && e[2]>=bounds[0] && e[2]<bounds[0]+bounds[2] && e[3]>=bounds[1] && e[3]<bounds[1]+bounds[3] && e[4]!=0 {
+      d.follow=false; d.top=max(0,d.top-e[4]*3);
+    }
+  }
+  draw.font("mono"); cell=max(1,draw.measure("M",15)); columns=max(1,round(floor((draw.width()-24)/cell)));
+  rows=max(1,round(floor((draw.height()-16)/21)));
+  if cached_revision!=d.revision || cached_columns!=columns {
+   visual=[];
+   for line in d.lines {
+    if line=="" { push(visual,""); }
+    else {
+      at=0; start=0; count=0;
+      while at<len(line) {
+        at=textbytes.next(line,at); count=count+1;
+        if count==columns { push(visual,textbytes.sub(line,start,at-start)); start=at; count=0; }
+      }
+      if at>start { push(visual,textbytes.sub(line,start,at-start)); }
+    }
+   }
+   cached_revision=d.revision; cached_columns=columns;
+  }
+  if d.follow { d.top=max(0,len(visual)-rows); }
+  d.top=max(0,min(d.top,max(0,len(visual)-rows)));
+  if d.top==max(0,len(visual)-rows) { d.follow=true; }
+  draw.clear(1184276); stop=min(len(visual),d.top+rows);
+  if stop>d.top { for i in d.top..(stop-1) { draw.text(12,8+(i-d.top)*21,visual[i],15,15658734); } }
+  set_text(status,(if busy then "Native command running" else "Native shell ready") @ " · " @ notice);
+  set_enabled(command,attached && !busy); set_enabled(send,attached && !busy);
+}
+platform.install(false);
+Window("KyIl Terminal",860px,540px) {
+  min-width: 360px; min-height: 240px; padding: 0px; spacing: 0px; layout: column; background: #121214; exit-key: "none"; max-fps: 0;
+  Row { width: fill; height: 34px; padding: 4px; spacing: 6px; background: #202024;
+    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Clear view"; height: 25px; onClick: { terminal_model.clear(d); }; }
+    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Copy output"; height: 25px; onClick: { clipboard.write("\n".join(d.lines)); }; }
+    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Follow output"; height: 25px; onClick: { d.follow=true; }; }
+    Label { text: "KyIlOS native command service"; color: #bdb3ce; font-size: 12px; }
+  }
+  Canvas { id: "output"; width: fill; height: fill; onDraw: { paint(); }; }
+  Row { width: fill; height: 42px; padding: 6px; spacing: 6px; background: #202024;
+    Label { text: "›"; width: 18px; color: #aa88ff; }
+    Input { id: "command"; width: fill; height: 28px; font-size: 15px; font-family: "mono"; color: #eeeeee; background: #121214; placeholder: "help, top, shutdown, run…"; onChange: { submit(); }; }
+    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; id: "send"; text: "Run"; height: 28px; onClick: { submit(); }; }
+  }
+  Label { id: "status"; width: fill; height: 25px; padding: 4px; font-size: 12px; color: #bdb3ce; text: "Connecting…"; }
+}

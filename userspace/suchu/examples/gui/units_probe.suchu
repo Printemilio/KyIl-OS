@@ -1,0 +1,39 @@
+// Sonde des unites de duree. Deux horloges : l'une en ms, l'autre en s.
+// Apres 6 secondes on doit lire environ 60 et 6.
+
+// Le garde-fou : 's' et 'ms' ne sont des unites que si rien de nommable ne
+// suit. Ces identifiants doivent rester intacts.
+s = 3;
+ms = 4;
+start = 10;
+print("s=" @ s @ " ms=" @ ms @ " start=" @ start @ " somme=" @ (s + ms + start));
+
+fast = 0;
+slow = 0;
+
+Window("Unites", 340px, 200px) {
+  background: #0f172a;
+  layout: column;
+  padding: 24px;
+  spacing: 12px;
+  align: center;
+
+  Label { id: "f"; text: "100ms : 0"; font-size: 22px; font-weight: bold; }
+  Label { id: "l"; text: "1s : 0"; font-size: 22px; font-weight: bold; color: #7dd3fc; }
+
+  Timer {
+    interval: 100ms;
+    onTick: {
+      fast = fast + 1;
+      set_text(f, "100ms : " @ fast);
+    };
+  }
+
+  Timer {
+    interval: 1s;
+    onTick: {
+      slow = slow + 1;
+      set_text(l, "1s : " @ slow);
+    };
+  }
+}

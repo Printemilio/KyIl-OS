@@ -1,0 +1,88 @@
+// A calculator built on eval(): the display holds the expression as text and
+// eval() runs it when you press '='.
+
+expression = "";
+
+fun update_display(text) {
+  set_text(display, text);
+}
+
+fun append_char(value) {
+  expression = expression @ value;
+  update_display(expression);
+}
+
+fun clear_expression() {
+  expression = "";
+  update_display("0");
+}
+
+fun evaluate_expression() {
+  if expression == "" {
+    update_display("0");
+    return none;
+  }
+
+  // A malformed expression would otherwise kill the program mid-click.
+  try {
+    result = eval(expression);
+    expression = "" @ result;
+    update_display(expression);
+  } else e {
+    update_display("Error");
+    expression = "";
+    print("Calculator: " @ e.message);
+  }
+}
+
+Window("CalcSuchu", 320px, 400px) {
+  background: #1e1e1e;
+  layout: column;
+  spacing: 8px;
+  padding: 16px;
+
+  Label {
+    id: "display";
+    text: "0";
+    font-size: 24px;
+    color: #2ecc71;
+  }
+
+  Row {
+    spacing: 6px;
+    Button { text: "7"; onClick: { append_char("7"); }; }
+    Button { text: "8"; onClick: { append_char("8"); }; }
+    Button { text: "9"; onClick: { append_char("9"); }; }
+    Button { text: "/"; onClick: { append_char("/"); }; }
+  }
+
+  Row {
+    spacing: 6px;
+    Button { text: "4"; onClick: { append_char("4"); }; }
+    Button { text: "5"; onClick: { append_char("5"); }; }
+    Button { text: "6"; onClick: { append_char("6"); }; }
+    Button { text: "*"; onClick: { append_char("*"); }; }
+  }
+
+  Row {
+    spacing: 6px;
+    Button { text: "1"; onClick: { append_char("1"); }; }
+    Button { text: "2"; onClick: { append_char("2"); }; }
+    Button { text: "3"; onClick: { append_char("3"); }; }
+    Button { text: "-"; onClick: { append_char("-"); }; }
+  }
+
+  Row {
+    spacing: 6px;
+    Button { text: "0"; onClick: { append_char("0"); }; }
+    Button { text: "."; onClick: { append_char("."); }; }
+    Button { text: "="; onClick: { evaluate_expression(); }; }
+    Button { text: "+"; onClick: { append_char("+"); }; }
+  }
+
+  Button {
+    text: "Clear";
+    background: #d96b27;
+    onClick: { clear_expression(); };
+  }
+}

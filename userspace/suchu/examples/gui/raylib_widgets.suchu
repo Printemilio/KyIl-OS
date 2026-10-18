@@ -1,0 +1,87 @@
+// Demo des elements ajoutes au backend raylib : Tabs, Input, Select, Scroll.
+// A tester a la main : taper des accents, effacer, coller (Ctrl+V), changer
+// d'onglet, ouvrir la liste, faire defiler a la molette.
+
+Window("Suchu - controls", 620px, 540px) {
+  background: #0f172a;
+  layout: column;
+  padding: 20px;
+  spacing: 16px;
+
+  Tabs {
+
+    Tab {
+      title: "Saisie";
+      padding: 18px;
+      spacing: 14px;
+
+      Label { text: "Ton nom (essaie des accents : é à ü ł) :"; font-size: 15px; color: #94a3b8; }
+
+      Input {
+        id: "name";
+        placeholder: "Prenom Nom";
+        width: 380px;
+        onInput: {
+          set_text(echo, "Bonjour " @ get_text(name) @ " !");
+        };
+      }
+
+      Label { id: "echo"; text: "Bonjour !"; font-size: 20px; font-weight: bold; }
+
+      Label { text: "Langue :"; font-size: 15px; color: #94a3b8; }
+
+      Select {
+        id: "lang";
+        width: 240px;
+        onChange: {
+          set_text(echo_lang, "Choix : " @ event_value);
+        };
+
+        Option { text: "Francais"; }
+        Option { text: "English"; }
+        Option { text: "Deutsch"; }
+        Option { text: "Polski"; }
+      }
+
+      Label { id: "echo_lang"; text: "Choix : Francais"; font-size: 16px; color: #7dd3fc; }
+    }
+
+    Tab {
+      title: "Defilement";
+      padding: 18px;
+      spacing: 12px;
+
+      Label { text: "Molette dans le cadre :"; font-size: 15px; color: #94a3b8; }
+
+      Scroll {
+        height: 300px;
+        width: 520px;
+        padding: 14px;
+        spacing: 10px;
+        background: #1e293b;
+        border-radius: 12px;
+
+        Label { text: "Ligne 1 - le contenu depasse le cadre"; font-size: 16px; }
+        Label { text: "Ligne 2 - et se fait couper proprement"; font-size: 16px; }
+        Label { text: "Ligne 3"; font-size: 16px; }
+        Label { text: "Ligne 4"; font-size: 16px; }
+        Label { text: "Ligne 5"; font-size: 16px; }
+        Label { text: "Ligne 6"; font-size: 16px; }
+        Label { text: "Ligne 7"; font-size: 16px; }
+        Label { text: "Ligne 8"; font-size: 16px; }
+        Label { text: "Ligne 9"; font-size: 16px; }
+
+        Button {
+          text: "Un bouton tout en bas";
+          onClick: { set_text(scroll_note, "Clique alors qu'il etait scrolle."); };
+        }
+
+        Label { text: "Ligne 10"; font-size: 16px; }
+        Label { text: "Ligne 11"; font-size: 16px; }
+        Label { text: "Ligne 12 - fin"; font-size: 16px; }
+      }
+
+      Label { id: "scroll_note"; text: "Le bouton du bas doit rester cliquable."; font-size: 14px; color: #94a3b8; }
+    }
+  }
+}

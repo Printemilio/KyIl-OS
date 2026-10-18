@@ -1,0 +1,11 @@
+// Two modules that define the same names must not see each other's. The compiler
+// once kept a module's new names in the one table every module shares, so the
+// second to be loaded replaced the first's functions and variables.
+import "modules/same_name_a.suchu";
+import "modules/same_name_b.suchu";
+
+print(same_name_a.helper());
+print(same_name_b.helper(5));
+print(same_name_a.describe());
+print(same_name_b.describe());
+print(same_name_a.label @ same_name_b.label);

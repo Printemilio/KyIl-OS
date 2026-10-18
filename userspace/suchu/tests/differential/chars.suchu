@@ -1,0 +1,41 @@
+// 'b' is a char: one character between apostrophes. It is the string "b", so it
+// compares equal to it, prints as it does and concatenates like it; what the
+// apostrophes add is a way to say "exactly one character", and the lexer holds
+// the writer to it.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun lexes(label, source) {
+  // The source of a char that should be refused is built at runtime, so that the
+  // refusal happens in eval and not while this file is being read.
+  try {
+    value = eval(source);
+    show(label @ " -> ", value);
+  } else e {
+    print(label @ " -> " @ e.message);
+  }
+}
+
+fun main() {
+  show("letter       = ", 'b');
+  show("equals text  = ", 'b' == "b");
+  show("accent       = ", 'é');
+  show("joined       = ", 'a' @ 'b' @ 'c');
+  show("escaped quote= ", '\'' == "'");
+  show("double quote = ", '"' == "\"");
+  show("backslash    = ", '\\' == "\\");
+  show("newline      = ", '\n' == "\n");
+  show("tab          = ", '\t' == "\t");
+  show("in a list    = ", ['a', 'b']);
+  show("type         = ", type('b'));
+
+  lexes("too long     ", "'hello';");
+  lexes("empty        ", "'';");
+  lexes("not closed   ", "'a;");
+  lexes("one accent   ", "'é';");
+  lexes("two accents  ", "'éé';");
+}
+
+main();

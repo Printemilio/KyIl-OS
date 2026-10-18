@@ -1,0 +1,75 @@
+--- a/src/c/vendor/raylib/src/rcore.c	2026-10-07 23:10:57.787058623 +0200
++++ b/src/c/vendor/raylib/src/rcore.c	2026-10-07 23:10:57.787487411 +0200
+@@ -92,12 +92,12 @@
+ //----------------------------------------------------------------------------------
+ // Feature Test Macros required for this module
+ //----------------------------------------------------------------------------------
+-#if (defined(__linux__) || defined(PLATFORM_WEB) || defined(PLATFORM_WEB_RGFW)) && (_XOPEN_SOURCE < 500)
++#if (defined(__linux__) || defined(__vexos__) || defined(PLATFORM_WEB) || defined(PLATFORM_WEB_RGFW)) && (_XOPEN_SOURCE < 500)
+     #undef _XOPEN_SOURCE
+     #define _XOPEN_SOURCE 500       // Required for: readlink if compiled with c99 without GNU extensions
+ #endif
+ 
+-#if (defined(__linux__) || defined(PLATFORM_WEB) || defined(PLATFORM_WEB_RGFW)) && (_POSIX_C_SOURCE < 199309L)
++#if (defined(__linux__) || defined(__vexos__) || defined(PLATFORM_WEB) || defined(PLATFORM_WEB_RGFW)) && (_POSIX_C_SOURCE < 199309L)
+     #undef _POSIX_C_SOURCE
+     #define _POSIX_C_SOURCE 199309L // Required for: CLOCK_MONOTONIC if compiled with c99 without GNU extensions
+ #endif
+@@ -168,7 +168,7 @@
+     #if defined(__cplusplus)
+     }
+     #endif
+-#elif defined(__linux__)
++#elif defined(__linux__) || defined(__vexos__)
+     #include <unistd.h>
+ #elif defined(__FreeBSD__)
+     #include <sys/types.h>
+@@ -550,6 +550,8 @@
+     #include "platforms/rcore_android.c"
+ #elif defined(PLATFORM_MEMORY)
+     #include "platforms/rcore_memory.c"
++#elif defined(PLATFORM_VEXOS)
++    #include "rcore_vexos.c"            // Vex OS: userspace/raylib in the Vex tree
+ #else
+     // TODO: Include your custom platform backend!
+     // i.e software rendering backend or console backend!
+@@ -626,6 +628,8 @@
+     TRACELOG(LOG_INFO, "Platform backend: ANDROID");
+ #elif defined(PLATFORM_MEMORY)
+     TRACELOG(LOG_INFO, "Platform backend: MEMORY (No OS)");
++#elif defined(PLATFORM_VEXOS)
++    TRACELOG(LOG_INFO, "Platform backend: VEXOS (software renderer)");
+ #else
+     // TODO: Include your custom platform backend!
+     // i.e software rendering backend or console backend!
+@@ -1114,7 +1118,12 @@
+ #endif
+     else
+     {
++#if defined(GRAPHICS_API_OPENGL_SOFTWARE)
++        // rlsw takes the scissor rectangle with a top-left origin (swScissor)
++        rlScissor(x, y, width, height);
++#else
+         rlScissor(x, CORE.Window.currentFbo.height - (y + height), width, height);
++#endif
+     }
+ }
+ 
+@@ -1683,7 +1692,7 @@
+     #if defined(_WIN32)
+         Sleep((unsigned long)(sleepSeconds*1000.0));
+     #endif
+-    #if defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__EMSCRIPTEN__)
++    #if defined(__linux__) || defined(__vexos__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__EMSCRIPTEN__)
+         struct timespec req = { 0 };
+         time_t sec = sleepSeconds;
+         long nsec = (sleepSeconds - sec)*1000000000L;
+@@ -4230,7 +4239,7 @@
+     timeBeginPeriod(1); // Setup high-resolution timer to 1ms (granularity of 1-2 ms)
+ #endif
+ 
+-#if defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__EMSCRIPTEN__)
++#if defined(__linux__) || defined(__vexos__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__EMSCRIPTEN__)
+     struct timespec now = { 0 };
+ 
+     if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) // Success

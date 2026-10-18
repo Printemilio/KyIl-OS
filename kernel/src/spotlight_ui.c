@@ -14,6 +14,7 @@
 #include <unos/spotlight.h>
 #include <unos/tty.h>
 #include <unos/users.h>
+#include <unos/vex_lvgl_ui.h>
 #include <unos/voice.h>
 
 #define SPOTLIGHT_UI_QUERY_MAX 64u
@@ -23,7 +24,7 @@
 #define SPOTLIGHT_PROCESS_PRIORITY 1u
 #define SPOTLIGHT_TEXT_CELL_WIDTH 8ull
 #define SPOTLIGHT_TEXT_CELL_HEIGHT 16ull
-#define SPOTLIGHT_BAR_HEIGHT 52ull
+#define SPOTLIGHT_BAR_HEIGHT 50ull
 #define SPOTLIGHT_PANEL_GAP 14ull
 #define SPOTLIGHT_PANEL_PAD 14ull
 #define SPOTLIGHT_ANIM_STEPS 8u
@@ -139,103 +140,29 @@ static void set_query_text(const char *text) {
     spotlight_query_text[spotlight_query_length] = '\0';
 }
 
-static uint32_t blend_rgb(spotlight_rgb_t bg, spotlight_rgb_t fg, uint8_t alpha) {
-    const uint8_t inv = (uint8_t)(255u - alpha);
-
-    return gui_color_rgb(
-        (uint8_t)(((uint32_t)bg.r * inv + (uint32_t)fg.r * alpha) / 255u),
-        (uint8_t)(((uint32_t)bg.g * inv + (uint32_t)fg.g * alpha) / 255u),
-        (uint8_t)(((uint32_t)bg.b * inv + (uint32_t)fg.b * alpha) / 255u)
-    );
-}
-
+/* Inter 16 / 13 — alpha-blended over the scene; bg kept for API compatibility */
 static void draw_text_clipped(uint64_t x, uint64_t y, uint64_t max_width, const char *text, spotlight_rgb_t fg, spotlight_rgb_t bg) {
-    char clipped[96];
-    size_t limit = max_width / SPOTLIGHT_TEXT_CELL_WIDTH;
-    size_t i = 0;
-
-    if (text == NULL || max_width < SPOTLIGHT_TEXT_CELL_WIDTH) {
-        return;
-    }
-
-    if (limit >= sizeof(clipped)) {
-        limit = sizeof(clipped) - 1u;
-    }
-
-    while (i < limit && text[i] != '\0') {
-        clipped[i] = text[i];
-        ++i;
-    }
-    clipped[i] = '\0';
-
-    for (size_t ci = 0; clipped[ci] != '\0'; ++ci) {
-        uint8_t c = (uint8_t)clipped[ci];
-        if (c < PLEX_MONO_12_FIRST || c > PLEX_MONO_12_LAST) {
-            c = (uint8_t)'?';
-        }
-
-        const size_t glyph_index = (size_t)(c - PLEX_MONO_12_FIRST) * PLEX_MONO_12_WIDTH * PLEX_MONO_12_HEIGHT;
-        const uint64_t glyph_x = x + ci * PLEX_MONO_12_WIDTH;
-
-        for (uint64_t gy = 0; gy < PLEX_MONO_12_HEIGHT; ++gy) {
-            for (uint64_t gx = 0; gx < PLEX_MONO_12_WIDTH; ++gx) {
-                const uint8_t alpha = plex_mono_12_alpha[glyph_index + gy * PLEX_MONO_12_WIDTH + gx];
-                if (alpha != 0u) {
-                    gui_text_put_pixel(glyph_x + gx, y + gy, blend_rgb(bg, fg, alpha));
-                }
-            }
-        }
-    }
+    (void)bg;
+    gui_font_text_clipped(x, y > 2u ? y - 2u : y, text,
+                          gui_color_rgb(fg.r, fg.g, fg.b), 16u, max_width);
 }
 
 static void draw_small_text_clipped(uint64_t x, uint64_t y, uint64_t max_width, const char *text, spotlight_rgb_t fg, spotlight_rgb_t bg) {
-    char clipped[112];
-    size_t limit = max_width / PLEX_MONO_10_WIDTH;
-    size_t i = 0;
-
-    if (text == NULL || max_width < PLEX_MONO_10_WIDTH) {
-        return;
-    }
-
-    if (limit >= sizeof(clipped)) {
-        limit = sizeof(clipped) - 1u;
-    }
-
-    while (i < limit && text[i] != '\0') {
-        clipped[i] = text[i];
-        ++i;
-    }
-    clipped[i] = '\0';
-
-    for (size_t ci = 0; clipped[ci] != '\0'; ++ci) {
-        uint8_t c = (uint8_t)clipped[ci];
-        if (c < PLEX_MONO_10_FIRST || c > PLEX_MONO_10_LAST) {
-            c = (uint8_t)'?';
-        }
-
-        const size_t glyph_index = (size_t)(c - PLEX_MONO_10_FIRST) * PLEX_MONO_10_WIDTH * PLEX_MONO_10_HEIGHT;
-        const uint64_t glyph_x = x + ci * PLEX_MONO_10_WIDTH;
-
-        for (uint64_t gy = 0; gy < PLEX_MONO_10_HEIGHT; ++gy) {
-            for (uint64_t gx = 0; gx < PLEX_MONO_10_WIDTH; ++gx) {
-                const uint8_t alpha = plex_mono_10_alpha[glyph_index + gy * PLEX_MONO_10_WIDTH + gx];
-                if (alpha != 0u) {
-                    gui_text_put_pixel(glyph_x + gx, y + gy, blend_rgb(bg, fg, alpha));
-                }
-            }
-        }
-    }
+    (void)bg;
+    gui_font_text_clipped(x, y, text,
+                          gui_color_rgb(fg.r, fg.g, fg.b), 13u, max_width);
 }
 
 static void compute_overlay_rect(size_t result_count) {
     const uint64_t width = gui_width();
     const uint64_t height = gui_height();
     const uint64_t rows = result_count > SPOTLIGHT_UI_MAX_RESULTS ? SPOTLIGHT_UI_MAX_RESULTS : result_count;
+    /* Figma: bar 1028×50 centred, top at 33.3% of screen height */
     uint64_t wanted_w = (width * 58u) / 100u;
     const uint64_t wanted_h = SPOTLIGHT_BAR_HEIGHT + (rows == 0 ? 34u : SPOTLIGHT_PANEL_GAP + SPOTLIGHT_PANEL_PAD * 2u + rows * SPOTLIGHT_UI_LINE_HEIGHT);
 
-    if (wanted_w > 1040u) {
-        wanted_w = 1040u;
+    if (wanted_w > 1028u) {
+        wanted_w = 1028u;
     }
     if (wanted_w < 560u) {
         wanted_w = width > 64u ? width - 64u : width;
@@ -245,7 +172,7 @@ static void compute_overlay_rect(size_t result_count) {
     overlay_h = wanted_h;
 
     overlay_x = width > overlay_w ? (width - overlay_w) / 2u : 0;
-    overlay_y = height > overlay_h ? (height * 28u) / 100u : 0;
+    overlay_y = height > overlay_h ? (height * 333u) / 1000u : 0;
 }
 
 static void hide_overlay_now(void) {
@@ -258,6 +185,7 @@ static void hide_overlay_now(void) {
     previous_overlay_h = 0;
     spotlight_query_text[0] = '\0';
     spotlight_query_length = 0;
+    vex_lvgl_ui_hide_spotlight();
     gui_restore_after_overlay();
 }
 
@@ -291,13 +219,12 @@ static void draw_result(size_t index, const spotlight_result_view_t *result, uin
     const uint64_t badge_h = 22u;
     const uint64_t badge_x = row_x + row_w - 96u;
     const uint64_t badge_y = row_y + (row_h - badge_h) / 2u;
+    /* Figma flat rows: selection chip only, no neon */
+    (void)arrow_x; (void)selected; (void)panel;
     if (selected_row) {
-        draw_text_clipped(arrow_x, row_y + 10u, 8u, ">", SPOTLIGHT_RGB(160, 80, 255), SPOTLIGHT_RGB(22, 16, 40));
-        gui_fill_rounded_rect(row_x, row_y, row_w, row_h, 10u, gui_color_rgb(168, 116, 230));
-        gui_fill_rounded_rect(row_x + 1u, row_y + 1u, row_w - 2u, row_h - 2u, 9u, selected);
-        gui_fill_rounded_rect(row_x + 1u, row_y + 1u, 3u, row_h - 2u, 2u, gui_color_rgb(136, 48, 224));
+        gui_fill_rounded_rect(row_x, row_y, row_w, row_h, 8u, gui_color_rgb(86, 43, 90));
     } else {
-        gui_fill_rounded_rect(row_x, row_y, row_w, row_h, 9u, panel);
+        gui_fill_rounded_rect(row_x, row_y, row_w, row_h, 8u, gui_color_rgb(44, 38, 79));
     }
 
     gui_fill_rounded_rect(icon_x - 15u, icon_y - 15u, 30u, 30u, 6u, gui_color_rgb(36, 24, 64));
@@ -373,9 +300,6 @@ static void draw_overlay(void) {
     const uint32_t shell_soft = gui_color_rgb(48, 30, 84);   /* lighter inner */
     const uint32_t purple_l   = gui_color_rgb(148, 78, 240); /* vivid neon border left */
     const uint32_t purple_r   = gui_color_rgb(196, 64, 218); /* vivid border right */
-    const spotlight_rgb_t text_rgb      = SPOTLIGHT_RGB(236, 228, 255);
-    const spotlight_rgb_t muted_rgb     = SPOTLIGHT_RGB(160, 142, 200);
-    const spotlight_rgb_t shell_soft_rgb = SPOTLIGHT_RGB(48, 30, 84);
     const spotlight_rgb_t black_rgb     = SPOTLIGHT_RGB(20, 14, 38);
     const spotlight_rgb_t panel_rgb     = SPOTLIGHT_RGB(32, 22, 58);
     const uint32_t panel        = gui_color_rgb(32, 22, 58);   /* visible dark glass panel */
@@ -385,49 +309,110 @@ static void draw_overlay(void) {
         return;
     }
 
+    compute_overlay_rect(count);
     if (!spotlight_backdrop_ready) {
         gui_restore_after_overlay();
         gui_blur_desktop_background();
         spotlight_backdrop_ready = 1;
-    } else if (previous_overlay_w != 0u && previous_overlay_h != 0u) {
-        gui_restore_blurred_rect(previous_overlay_x, previous_overlay_y, previous_overlay_w, previous_overlay_h);
+    } else {
+        const uint64_t pad = 24u;
+        const uint64_t next_x = overlay_x > pad ? overlay_x - pad : 0u;
+        const uint64_t next_y = overlay_y > pad ? overlay_y - pad : 0u;
+        const uint64_t next_w = overlay_w + pad * 2u;
+        const uint64_t next_h = overlay_h + pad * 2u;
+        uint64_t restore_x = next_x;
+        uint64_t restore_y = next_y;
+        uint64_t restore_right = next_x + next_w;
+        uint64_t restore_bottom = next_y + next_h;
+
+        /*
+         * LVGL draws over the compositor scene. Restore the union of the old
+         * and new overlay rectangles first, otherwise a resized result panel
+         * can leave old purple pixels frozen around the Spotlight card.
+         */
+        if (previous_overlay_w != 0u && previous_overlay_h != 0u) {
+            const uint64_t previous_right =
+                previous_overlay_x + previous_overlay_w;
+            const uint64_t previous_bottom =
+                previous_overlay_y + previous_overlay_h;
+            if (previous_overlay_x < restore_x) {
+                restore_x = previous_overlay_x;
+            }
+            if (previous_overlay_y < restore_y) {
+                restore_y = previous_overlay_y;
+            }
+            if (previous_right > restore_right) {
+                restore_right = previous_right;
+            }
+            if (previous_bottom > restore_bottom) {
+                restore_bottom = previous_bottom;
+            }
+        }
+        gui_restore_blurred_rect(restore_x, restore_y,
+            restore_right - restore_x, restore_bottom - restore_y);
     }
 
-    compute_overlay_rect(count);
     visible_result_count = count > SPOTLIGHT_UI_MAX_RESULTS ? SPOTLIGHT_UI_MAX_RESULTS : count;
     if (selected_result_index >= visible_result_count) {
         selected_result_index = visible_result_count == 0u ? 0u : visible_result_count - 1u;
     }
 
-    const uint64_t border_x = overlay_x > 0u ? overlay_x - 1u : overlay_x;
-    const uint64_t border_y = overlay_y > 0u ? overlay_y - 1u : overlay_y;
-    /* Drop shadow: 2 dark layers, not bright rings */
-    gui_fill_rounded_rect(overlay_x > 10u ? overlay_x - 10u : 0u, overlay_y > 10u ? overlay_y - 10u : 0u, overlay_w + 20u, SPOTLIGHT_BAR_HEIGHT + 20u, 34u, gui_color_rgb(14, 8, 28));
-    gui_fill_rounded_rect(overlay_x > 5u ? overlay_x - 5u : 0u, overlay_y > 5u ? overlay_y - 5u : 0u, overlay_w + 10u, SPOTLIGHT_BAR_HEIGHT + 10u, 31u, gui_color_rgb(36, 18, 68));
-    gui_fill_rounded_rect_horizontal_gradient(border_x, border_y, overlay_w + 2u, SPOTLIGHT_BAR_HEIGHT + 2u, 27u, purple_l, purple_r);
-    gui_fill_rounded_rect_horizontal_gradient(overlay_x, overlay_y, overlay_w, SPOTLIGHT_BAR_HEIGHT, 26u, shell, gui_color_rgb(14, 10, 30));
-    gui_fill_rounded_rect_horizontal_gradient(overlay_x + 3u, overlay_y + 3u, overlay_w - 6u, SPOTLIGHT_BAR_HEIGHT - 6u, 23u, shell_soft, gui_color_rgb(18, 12, 36));
-    /* Glass top-edge highlight */
-    gui_fill_rect(overlay_x + 26u, overlay_y + 1u, overlay_w > 52u ? overlay_w - 52u : overlay_w, 1u, gui_color_rgb(80, 56, 130));
-    /* Separator line bottom */
-    gui_fill_rect(overlay_x + 26u, overlay_y + SPOTLIGHT_BAR_HEIGHT - 8u, overlay_w > 52u ? overlay_w - 52u : overlay_w, 1u, gui_color_rgb(70, 48, 110));
+    if (vex_lvgl_ui_ready()) {
+        vex_lvgl_ui_item_t items[SPOTLIGHT_UI_MAX_RESULTS];
+        uint8_t reveal_percent = 100u;
+
+        for (size_t i = 0u; i < visible_result_count; ++i) {
+            const spotlight_result_view_t *result = spotlight_result(i);
+            items[i].title = result == NULL ? "" : result->title;
+            items[i].subtitle = result == NULL ? "" :
+                (result->description != NULL && result->description[0] != '\0'
+                    ? result->description : result->path);
+            items[i].meta = result == NULL ? "" : result->category;
+            items[i].kind = result == NULL ? VEX_LVGL_UI_ITEM_FILE :
+                (result->kind == SPOTLIGHT_RESULT_APP ? VEX_LVGL_UI_ITEM_APP :
+                 (result->kind == SPOTLIGHT_RESULT_COMMAND
+                    ? VEX_LVGL_UI_ITEM_COMMAND : VEX_LVGL_UI_ITEM_FILE));
+            items[i].selected = i == selected_result_index ? 1u : 0u;
+        }
+        if (spotlight_anim_state == ANIM_OPENING || spotlight_anim_state == ANIM_CLOSING) {
+            reveal_percent = (uint8_t)((spotlight_anim_step * 100u) / SPOTLIGHT_ANIM_STEPS);
+        }
+        vex_lvgl_ui_draw_spotlight((uint32_t)overlay_x, (uint32_t)overlay_y,
+            (uint32_t)overlay_w, spotlight_query_text, items,
+            (uint32_t)visible_result_count, confirmation_pending ? 1u : 0u,
+            reveal_percent);
+
+        previous_overlay_x = overlay_x > 24u ? overlay_x - 24u : 0u;
+        previous_overlay_y = overlay_y > 24u ? overlay_y - 24u : 0u;
+        previous_overlay_w = overlay_w + 48u;
+        previous_overlay_h = overlay_h + 48u;
+        gui_redraw_cursor_overlay();
+        return;
+    }
+
+    /* Figma flat glass bar: dark rounded rect, no neon borders */
+    (void)purple_l; (void)purple_r; (void)shell; (void)shell_soft;
+    gui_fill_rounded_rect(overlay_x, overlay_y, overlay_w, SPOTLIGHT_BAR_HEIGHT, 10u, gui_color_rgb(44, 38, 79));
 
     if (spotlight_query_text[0] == '\0') {
-        draw_text_clipped(overlay_x + 34u, overlay_y + (SPOTLIGHT_BAR_HEIGHT - SPOTLIGHT_TEXT_CELL_HEIGHT) / 2u, overlay_w - 104u, "Search apps, files, commands ...", muted_rgb, shell_soft_rgb);
+        /* Figma placeholder: white "Search what you want ..." */
+        draw_text_clipped(overlay_x + 19u, overlay_y + (SPOTLIGHT_BAR_HEIGHT - SPOTLIGHT_TEXT_CELL_HEIGHT) / 2u, overlay_w - 104u, "Search what you want ...", SPOTLIGHT_RGB(255, 255, 255), SPOTLIGHT_RGB(44, 38, 79));
     } else {
-        draw_text_clipped(overlay_x + 34u, overlay_y + (SPOTLIGHT_BAR_HEIGHT - SPOTLIGHT_TEXT_CELL_HEIGHT) / 2u, overlay_w - 104u, spotlight_query_text, text_rgb, shell_soft_rgb);
+        draw_text_clipped(overlay_x + 19u, overlay_y + (SPOTLIGHT_BAR_HEIGHT - SPOTLIGHT_TEXT_CELL_HEIGHT) / 2u, overlay_w - 104u, spotlight_query_text, SPOTLIGHT_RGB(255, 255, 255), SPOTLIGHT_RGB(44, 38, 79));
     }
 
-    draw_orb(overlay_x + overlay_w - 32u, overlay_y + 26u);
+    /* Vex hexagon at the right edge of the bar */
+    draw_orb(overlay_x + overlay_w - 32u, overlay_y + SPOTLIGHT_BAR_HEIGHT / 2u);
     if (count == 0) {
-        draw_text_clipped(overlay_x + overlay_w - 174u, overlay_y + 64u, 174u, "Ctrl + Space to talk", muted_rgb, black_rgb);
+        /* Figma hint: bottom-right, just under the bar */
+        draw_text_clipped(overlay_x + overlay_w - 174u, overlay_y + SPOTLIGHT_BAR_HEIGHT + 4u, 174u, "Ctrl + Space to talk", SPOTLIGHT_RGB(124, 113, 135), black_rgb);
     }
 
     if (count == 0) {
-        previous_overlay_x = overlay_x > 12u ? overlay_x - 12u : 0u;
-        previous_overlay_y = overlay_y > 12u ? overlay_y - 12u : 0u;
-        previous_overlay_w = overlay_w + 24u;
-        previous_overlay_h = 112u;
+        previous_overlay_x = overlay_x > 24u ? overlay_x - 24u : 0u;
+        previous_overlay_y = overlay_y > 24u ? overlay_y - 24u : 0u;
+        previous_overlay_w = overlay_w + 48u;
+        previous_overlay_h = overlay_h + 48u;
         gui_redraw_cursor_overlay();
         return;
     }
@@ -435,10 +420,9 @@ static void draw_overlay(void) {
     const size_t visible = visible_result_count;
     const uint64_t panel_y = overlay_y + SPOTLIGHT_BAR_HEIGHT + SPOTLIGHT_PANEL_GAP;
     const uint64_t panel_h = SPOTLIGHT_PANEL_PAD * 2u + visible * SPOTLIGHT_UI_LINE_HEIGHT;
-    /* Results panel drop shadow: dark, not bright ring */
-    gui_fill_rounded_rect(overlay_x > 5u ? overlay_x - 5u : 0u, panel_y > 5u ? panel_y - 5u : 0u, overlay_w + 10u, panel_h + 10u, 16u, gui_color_rgb(16, 8, 30));
-    gui_fill_rounded_rect(overlay_x, panel_y, overlay_w, panel_h, 14u, panel_border);
-    gui_fill_rounded_rect(overlay_x + 1u, panel_y + 1u, overlay_w - 2u, panel_h - 2u, 13u, panel);
+    /* Figma flat results panel — no neon border */
+    (void)panel_border;
+    gui_fill_rounded_rect(overlay_x, panel_y, overlay_w, panel_h, 10u, panel);
     if (confirmation_pending) {
         draw_text_clipped(overlay_x + 24u, panel_y + panel_h - 22u, overlay_w - 48u, "Enter confirme l'action, Esc annule", SPOTLIGHT_RGB(200, 112, 28), panel_rgb);
     }
@@ -452,10 +436,10 @@ static void draw_overlay(void) {
         }
     }
 
-    previous_overlay_x = overlay_x > 12u ? overlay_x - 12u : 0u;
-    previous_overlay_y = overlay_y > 12u ? overlay_y - 12u : 0u;
-    previous_overlay_w = overlay_w + 24u;
-    previous_overlay_h = overlay_h + 24u;
+    previous_overlay_x = overlay_x > 24u ? overlay_x - 24u : 0u;
+    previous_overlay_y = overlay_y > 24u ? overlay_y - 24u : 0u;
+    previous_overlay_w = overlay_w + 48u;
+    previous_overlay_h = overlay_h + 48u;
 
     if (spotlight_anim_state == ANIM_OPENING || spotlight_anim_state == ANIM_CLOSING) {
         const uint64_t pct = (spotlight_anim_step * 100u) / SPOTLIGHT_ANIM_STEPS;
@@ -477,8 +461,11 @@ static int result_is_program(const spotlight_result_view_t *result) {
 }
 
 static void run_path_via_loader(const char *path) {
-    gui_focus_terminal_for_launch();
-    if (elf_load(path) != 0) {
+    /* Spawn fire-and-forget. elf_load() waits for the program to exit
+     * (process_wait), which deadlocks the GUI pump when launching a
+     * long-running window app like Vex Paint from Spotlight — the whole
+     * desktop freezes until that app closes (i.e. forever). */
+    if (elf_spawn(path) != 0) {
         tty_puts("spotlight: run failed\n");
     }
 }
@@ -529,9 +516,11 @@ static void open_selected_result(void) {
     }
 
     if (action == SPOTLIGHT_ACTION_OPEN_BROWSER) {
-        if (elf_spawn("/home/root/bin/webkit") != 0) {
-            tty_puts("spotlight: browser launch failed\n");
-        }
+        /* Browser network access is a narrow capability granted by the
+         * native desktop launch path. A plain elf_spawn intentionally starts
+         * an unprivileged process and leaves WebKit's NetworkProcess unable
+         * to create outbound sockets. */
+        gui_browser_launch();
         return;
     }
 
@@ -551,9 +540,7 @@ static void open_selected_result(void) {
 
     if (program) {
         if (string_equals(path, "/home/root/bin/webkit")) {
-            if (elf_spawn(path) != 0) {
-                tty_puts("spotlight: run failed\n");
-            }
+            gui_browser_launch();
             return;
         }
 
@@ -628,6 +615,11 @@ void spotlight_ui_close(void) {
 
 int spotlight_ui_is_open(void) {
     return spotlight_open;
+}
+
+int spotlight_ui_is_animating(void) {
+    return spotlight_anim_state == ANIM_OPENING ||
+           spotlight_anim_state == ANIM_CLOSING;
 }
 
 int spotlight_ui_take_shell_return(void) {
@@ -770,9 +762,7 @@ void spotlight_ui_voice_listen(void) {
 
     if (command == VOICE_COMMAND_OPEN_BROWSER) {
         hide_overlay_now();
-        if (elf_spawn("/home/root/bin/webkit") != 0) {
-            tty_puts("voice: browser launch failed\n");
-        }
+        gui_browser_launch();
         shell_return_pending = 1;
     }
 }
@@ -794,6 +784,10 @@ void spotlight_ui_tick(void) {
             hide_overlay_now();
         }
     }
+}
+
+void spotlight_ui_redraw(void) {
+    if(spotlight_ui_is_open())draw_overlay();
 }
 
 static void spotlight_process_loop(void) {

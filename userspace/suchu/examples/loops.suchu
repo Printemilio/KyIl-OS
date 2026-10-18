@@ -1,0 +1,56 @@
+fun accumulate(values) {
+  total = 0;
+  for (value in values) {
+    total = total + value;
+  }
+  return total;
+}
+
+fun countdown(start) {
+  current = start;
+  while (current >= 0) {
+    print("T-" @ current);
+    current = current - 1;
+  }
+  print("Launch!");
+}
+
+fun describe_score(score) {
+  match score {
+    case 0 { print("No hits yet."); }
+    case 1 { print("Single hit!"); }
+    default { print("" @ score @ " hits recorded."); }
+  }
+}
+
+fun collect_unique(items) {
+  unique = set {};
+  for (item in items) {
+    unique = unique | set { item };
+  }
+  return unique;
+}
+
+fun main() {
+  range_values = 1..5;
+  print("Range 1..5: " @ range_values);
+  print("Range sum: " @ accumulate(range_values));
+
+  countdown(3);
+
+  fruits = ["apple", "banana", "apple", "pear"];
+  unique_fruits = collect_unique(fruits);
+  print("Unique fruits: " @ unique_fruits);
+
+  scores = [0, 1, 4];
+  for (score in scores) {
+    describe_score(score);
+  }
+
+  print("Characters in 'Suchu':");
+  for (letter in "Suchu") {
+    print(" - " @ letter);
+  }
+}
+
+main();

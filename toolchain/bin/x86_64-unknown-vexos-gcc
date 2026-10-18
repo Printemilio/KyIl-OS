@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# C compiler driver for native Vex programs.
+#
+# Wraps the host GCC (same x86-64 System V ABI) with the Vex sysroot: Vex
+# libc headers instead of the host's, and at link time the Vex startup
+# objects and libc instead of glibc. The result is a static ELF executable
+# carrying the .note.vexos native ABI note (from crt1.o).
+#
+# Environment: VEX_SYSROOT (default: <repo>/build/vex-sysroot), VEX_HOST_CC.
+set -euo pipefail
+here=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+sysroot=${VEX_SYSROOT:-$(CDPATH= cd -- "$here/../../build/vex-sysroot" && pwd)}
+cc=${VEX_HOST_CC:-gcc}
+gcc_include=$("$cc" -print-file-name=include)
+
+link=1
+for arg in "$@"; do
+    case "$arg" in
+        -c|-S|-E|-M|-MM) link=0 ;;
+    esac
+done
+
+# Options the host driver must not see: Vex programs are always static,
+# non-PIE, linked against the Vex libc.
+args=()
+for arg in "$@"; do
+    case "$arg" in
+        -pthread) args+=(-D_REENTRANT) ;; # threads are part of libc
+        -static|-no-pie|-fno-pie|-fno-PIE) ;;
+        -shared|-pie|-rdynamic)
+            echo "x86_64-vexos-gcc: $arg is not supported yet (static executables only)" >&2
+            exit 1 ;;
+        *) args+=("$arg") ;;
+    esac
+done
+
+# The host compiler predefines its own OS; Vex code must see Vex, not Linux.
+compile_flags=(-nostdinc -isystem "$sysroot/include" -idirafter "$gcc_include"
+    -U__linux__ -U__linux -Ulinux -U__gnu_linux__ -D__vexos__=1
+    -fno-pie -fno-stack-protector -fno-plt)
+
+if [ $link -eq 0 ]; then
+    exec "$cc" "${compile_flags[@]}" "${args[@]}"
+fi
+
+libgcc=$("$cc" -print-libgcc-file-name)
+crtbegin=$("$cc" -print-file-name=crtbeginT.o)
+crtend=$("$cc" -print-file-name=crtend.o)
+exec "$cc" "${compile_flags[@]}" -static -no-pie -nostdlib -nostartfiles \
+    -Wl,-z,noexecstack -Wl,-z,max-page-size=0x1000 -Wl,--build-id=none \
+    "$sysroot/lib/crt1.o" "$sysroot/lib/crti.o" "$crtbegin" \
+    "${args[@]}" \
+    -L"$sysroot/lib" -Wl,--start-group -lc "$libgcc" -Wl,--end-group \
+    "$crtend" "$sysroot/lib/crtn.o"

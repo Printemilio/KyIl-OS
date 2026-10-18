@@ -1,0 +1,47 @@
+// Reading live input: onInput fires on every keystroke, while the button
+// reads the same field on demand with get_text.
+
+Window("Hello Suchu", 380px, 220px) {
+  background: #1e1e1e;
+  layout: column;
+  spacing: 12px;
+  padding: 20px;
+
+  Label {
+    id: "greeting";
+    text: "Say hello to yourself";
+    font-size: 18px;
+    color: #f0f2f5;
+  }
+
+  Input {
+    id: "name_input";
+    placeholder: "Type your name";
+    onInput: {
+      name = event_value;
+      set_text(greeting, if (name == "") then "Hello!" else "Hello, " @ name @ "!");
+    };
+  }
+
+  Row {
+    spacing: 8px;
+
+    Button {
+      text: "Say hello";
+      onClick: {
+        name = get_text(name_input);
+        message = if (name == "") then "Hello!" else "Hello, " @ name @ "!";
+        print("Greeting from GUI: " @ message);
+        set_text(greeting, message);
+      };
+    }
+
+    Button {
+      text: "Clear";
+      onClick: {
+        set_text(name_input, "");
+        set_text(greeting, "Say hello to yourself");
+      };
+    }
+  }
+}

@@ -10,6 +10,10 @@
 #include <unos/scheduler.h>
 #include <unos/tty.h>
 #include <unos/udp.h>
+#include <unos/debug_log.h>
+#include <stdio.h>
+#include <string.h>
+#include <unos/network_state.h>
 
 #define DHCP_CLIENT_PORT 68u
 #define DHCP_SERVER_PORT 67u
@@ -76,6 +80,9 @@ static int worker_started;
 static int ack_announced;
 static int loaded_from_config;
 static int saved_config;
+enum {DHCP_IDLE,DHCP_WAIT_LINK,DHCP_SELECTING,DHCP_REQUESTING,DHCP_BOUND,DHCP_FAILED};
+static unsigned lease_state,attempts;
+static uint64_t deadline_ms,started_ms;
 
 static uint16_t bswap16(uint16_t value) {
     return (uint16_t)((value << 8u) | (value >> 8u));
@@ -207,6 +214,7 @@ static int key_at(const char *text, size_t size, size_t offset, const char *key)
 }
 
 static int load_config(void) {
+    ora_view_t fs_lease_0 __attribute__((cleanup(ora_view_release)))={0};
     void *data = 0;
     size_t size = 0;
     uint32_t ip = 0;
@@ -214,7 +222,7 @@ static int load_config(void) {
     uint32_t gateway = 0;
     uint32_t dns = 0;
 
-    if (fs_read(DHCP_CONFIG_PATH, &data, &size) != 0 || data == 0 || size == 0) {
+    if (fs_read_view(DHCP_CONFIG_PATH,&data,&size, &fs_lease_0) != 0 || data == 0 || size == 0) {
         return -1;
     }
 
@@ -297,22 +305,6 @@ static void announce_ack(void) {
     print_ipv4(offered_ip_addr);
     tty_putchar('\n');
     ack_announced = 1;
-}
-
-static void apply_virtualbox_fallback(void) {
-    if (configured != 0) {
-        return;
-    }
-
-    offered_ip_addr = DHCP_VBOX_FALLBACK_IP;
-    netmask_addr = DHCP_VBOX_FALLBACK_MASK;
-    gateway_addr = DHCP_VBOX_FALLBACK_GATEWAY;
-    dns_server_addr = DHCP_VBOX_FALLBACK_DNS;
-    ipv4_set_local_ip(offered_ip_addr);
-    configured = 1;
-    tty_puts("dhcp: fallback ip ");
-    print_ipv4(offered_ip_addr);
-    tty_putchar('\n');
 }
 
 static void build_packet(dhcp_packet_t *packet, uint8_t message_type) {
@@ -426,69 +418,41 @@ static uint32_t dhcp_option_ipv4(const dhcp_packet_t *packet, size_t size, uint8
 }
 
 static void dhcp_handle(uint32_t src_ip, uint16_t src_port, const void *data, size_t size) {
-    (void)src_port;
+    if(src_port!=DHCP_SERVER_PORT)return;
 
     if (size < offsetof(dhcp_packet_t, options)) {
         return;
     }
 
     const dhcp_packet_t *packet = data;
+
     if (packet->op != DHCP_OP_BOOTREPLY || bswap32(packet->xid) != transaction_id ||
         bswap32(packet->magic) != DHCP_MAGIC_COOKIE) {
         return;
     }
 
+    if(packet->htype!=1 || packet->hlen!=6 || memcmp(packet->chaddr,netdev_mac(),6))return;
     const uint8_t type = dhcp_message_type(packet, size);
-    if (type == DHCP_OFFER) {
+    if (type == DHCP_OFFER && lease_state==DHCP_SELECTING) {
         offered_ip_addr = bswap32(packet->yiaddr);
         server_ip_addr = src_ip;
+        if(!offered_ip_addr)return;
         have_offer = 1;
         return;
     }
 
-    if (type == DHCP_ACK) {
-        offered_ip_addr = bswap32(packet->yiaddr);
-        netmask_addr = dhcp_option_ipv4(packet, size, 1);
-        gateway_addr = dhcp_option_ipv4(packet, size, DHCP_OPTION_ROUTER);
-        dns_server_addr = dhcp_option_ipv4(packet, size, DHCP_OPTION_DNS_SERVER);
-        ipv4_set_local_ip(offered_ip_addr);
-        configured = 1;
+    if (type == DHCP_ACK && lease_state==DHCP_REQUESTING && src_ip==server_ip_addr) {
+        uint32_t address=bswap32(packet->yiaddr),mask=dhcp_option_ipv4(packet,size,1);
+        if(!address || address!=offered_ip_addr || !mask || ((~mask)&((~mask)+1u)))return;
+        netmask_addr=mask;gateway_addr=dhcp_option_ipv4(packet,size,DHCP_OPTION_ROUTER);
+        dns_server_addr=dhcp_option_ipv4(packet,size,DHCP_OPTION_DNS_SERVER);
+        ipv4_set_local_ip(address);
+        configured = 1;lease_state=DHCP_BOUND;
+        ack_wait_ms=boot_time_ms()-started_ms;
+        char line[160];snprintf(line,sizeof(line),"dhcp: real ACK server=%x address=%x mask=%x DNS=%x\n",server_ip_addr,offered_ip_addr,netmask_addr,dns_server_addr);debug_log_puts(line);
         save_config();
         announce_ack();
     }
-}
-
-static int dhcp_poll_until_ms(int *condition, uint64_t timeout_ms) {
-    const uint64_t start_ms = boot_time_ms();
-
-    for (uint32_t i = 0; boot_time_ms() - start_ms < timeout_ms && !*condition; ++i) {
-        (void)ethernet_poll();
-        if ((i % DHCP_POLL_YIELD_INTERVAL) == 0) {
-            process_yield();
-        }
-    }
-
-    return *condition != 0;
-}
-
-static int dhcp_wait_for_offer(dhcp_packet_t *packet) {
-    const uint64_t start_ms = boot_time_ms();
-    uint64_t next_discover_ms = start_ms;
-
-    for (uint32_t i = 0; boot_time_ms() - start_ms < DHCP_OFFER_TIMEOUT_MS && !have_offer; ++i) {
-        const uint64_t now_ms = boot_time_ms();
-        if (now_ms >= next_discover_ms) {
-            (void)udp_send(IPV4_BROADCAST, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, packet, tx_packet_size);
-            next_discover_ms = now_ms + DHCP_OFFER_RETRY_MS;
-        }
-
-        (void)ethernet_poll();
-        if ((i % DHCP_POLL_YIELD_INTERVAL) == 0) {
-            process_yield();
-        }
-    }
-
-    return have_offer != 0;
 }
 
 void dhcp_init(void) {
@@ -503,7 +467,7 @@ void dhcp_init(void) {
     tx_packet_size = 0;
     offer_wait_ms = 0;
     ack_wait_ms = 0;
-    worker_started = 0;
+    worker_started = 0;lease_state=DHCP_IDLE;deadline_ms=started_ms=0;attempts=0;
     ack_announced = 0;
     loaded_from_config = 0;
     saved_config = 0;
@@ -512,54 +476,34 @@ void dhcp_init(void) {
 }
 
 void dhcp_start(void) {
-    dhcp_packet_t packet;
-
-    if (configured != 0 && loaded_from_config != 0) {
-        return;
-    }
-
-    have_offer = 0;
-    configured = 0;
-    offered_ip_addr = 0;
-    server_ip_addr = 0;
-    netmask_addr = 0;
-    gateway_addr = 0;
-    dns_server_addr = 0;
-    ++transaction_id;
-
-    build_packet(&packet, DHCP_DISCOVER);
-    const uint64_t offer_start_ms = boot_time_ms();
-    if (!dhcp_wait_for_offer(&packet)) {
-        offer_wait_ms = boot_time_ms() - offer_start_ms;
-        apply_virtualbox_fallback();
-        return;
-    }
-    offer_wait_ms = boot_time_ms() - offer_start_ms;
-
-    build_packet(&packet, DHCP_REQUEST);
-    (void)udp_send(IPV4_BROADCAST, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, &packet, tx_packet_size);
-    const uint64_t ack_start_ms = boot_time_ms();
-    (void)dhcp_poll_until_ms(&configured, DHCP_ACK_TIMEOUT_MS);
-    ack_wait_ms = boot_time_ms() - ack_start_ms;
-    apply_virtualbox_fallback();
+    uint64_t flags=network_state_lock();
+    if(configured && loaded_from_config){lease_state=DHCP_BOUND;network_state_unlock(flags);return;}
+    have_offer=configured=0;offered_ip_addr=server_ip_addr=0;
+    netmask_addr=gateway_addr=dns_server_addr=0;ipv4_set_local_ip(0);
+    ++transaction_id;lease_state=DHCP_WAIT_LINK;attempts=0;deadline_ms=0;
+    network_state_unlock(flags);ethernet_wake();
 }
-
-static void dhcp_background_worker(void) {
-    while (!configured) {
-        dhcp_start();
-        process_yield();
+/* Called by the existing event-driven Ethernet worker. Zero means wait for
+ * a packet/link event; nonzero is the actual next protocol timer in ticks. */
+uint64_t dhcp_service(void) {
+    uint64_t flags=network_state_lock();uint64_t now=boot_time_ms(),result=0;
+    if(lease_state==DHCP_IDLE || lease_state==DHCP_BOUND || lease_state==DHCP_FAILED)goto done;
+    if(!netdev_link_up()){lease_state=DHCP_WAIT_LINK;attempts=0;goto done;}
+    if(lease_state==DHCP_WAIT_LINK){lease_state=DHCP_SELECTING;started_ms=now;deadline_ms=now;attempts=0;}
+    if(lease_state==DHCP_SELECTING && have_offer){
+        offer_wait_ms=now-started_ms;lease_state=DHCP_REQUESTING;started_ms=now;deadline_ms=now;attempts=0;
     }
-
-    process_wait();
-}
-
-void dhcp_start_async(void) {
-    if (worker_started != 0 || configured != 0) {
-        return;
+    if(now>=deadline_ms) {
+        if(attempts>=8){lease_state=DHCP_FAILED;debug_log_puts("dhcp: failed, no fabricated fallback address\n");goto done;}
+        dhcp_packet_t packet;build_packet(&packet,lease_state==DHCP_SELECTING?DHCP_DISCOVER:DHCP_REQUEST);
+        int sent=udp_send(IPV4_BROADCAST,DHCP_CLIENT_PORT,DHCP_SERVER_PORT,&packet,tx_packet_size);
+        if(!sent){attempts++;debug_log_puts(lease_state==DHCP_SELECTING?"dhcp: DISCOVER queued\n":"dhcp: REQUEST queued\n");}
+        deadline_ms=now+1000u;
     }
-
-    worker_started = process_create(dhcp_background_worker, DHCP_BACKGROUND_PRIORITY) != 0;
+    result=(deadline_ms-now+9)/10;if(!result)result=1;
+done:network_state_unlock(flags);return result;
 }
+void dhcp_start_async(void) {if(!worker_started && !configured){worker_started=1;dhcp_start();}}
 
 uint32_t dhcp_offered_ip(void) {
     return offered_ip_addr;

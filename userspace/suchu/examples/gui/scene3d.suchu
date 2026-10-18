@@ -1,0 +1,85 @@
+// A lit scene with solid and glass shapes.
+//
+// The camera goes round, three coloured lights sit above, and the shapes in the
+// middle are half solid and half glass. A shape's last numbers are its colour,
+// how solid it is -- 1 opaque, less than 1 glass -- and how tight its highlight
+// should be.
+//
+// Glass here is transparency, not refraction: the glass shapes are set aside
+// while the solid ones are drawn, then drawn afterwards from the furthest away
+// forward, with their edges lit more than their middles. That is what the eye
+// reads as glass. Bending the light through them would need the frame rendered
+// to a texture and sampled back, which is a different piece of work.
+
+import scene;
+
+angle = 0.0;
+
+fun main_scene() {
+  // Round the middle, a little above it, looking down at the centre.
+  distance = 9.0;
+  eye_x = sin(angle) * distance;
+  eye_z = cos(angle) * distance;
+  scene.camera(eye_x, 4.5, eye_z, 0.0, 0.8, 0.0);
+
+  // Enough ambient that nothing is ever fully black.
+  scene.ambient("#39435a", 0.25);
+
+  // Three lights, turning the other way so the highlights travel.
+  scene.light(sin(0.0 - angle) * 6.0, 6.0, cos(0.0 - angle) * 6.0, "#ffd9a0", 0.9);
+  scene.light(sin(2.1 - angle) * 6.0, 5.0, cos(2.1 - angle) * 6.0, "#7fd4ff", 0.8);
+  scene.light(sin(4.2 - angle) * 6.0, 4.0, cos(4.2 - angle) * 6.0, "#ff8fb0", 0.7);
+
+  scene.floor(0.0, 18.0, 18.0, "#232a36", 1.0);
+
+  // Solid shapes: a ring of pillars around the middle.
+  pillar = 0;
+  while (pillar < 6) {
+    around = pillar / 6.0 * 2.0 * pi;
+    scene.cylinder(sin(around) * 4.0, 0.0, cos(around) * 4.0, 0.3, 1.4, "#4a5568", 1.0);
+    pillar = pillar + 1;
+  }
+
+  // A solid cube on the floor, spinning lights playing over it.
+  scene.cube(0.0, 0.5, 0.0, 1.4, 1.0, 1.4, "#8b6b4a", 1.0, 24.0);
+
+  // Glass above it: a sphere and two panes, each letting the rest through.
+  scene.sphere(0.0, 2.3, 0.0, 1.0, "#5fd0ff", 0.35);
+  scene.cube(2.4, 1.4, 0.0, 0.12, 2.4, 2.4, "#8affc8", 0.28, 64.0);
+  scene.cube(0.0 - 2.4, 1.4, 0.0, 0.12, 2.4, 2.4, "#ffb0e0", 0.28, 64.0);
+
+  // A small glass cube tumbling inside the big sphere, to show the ordering
+  // works in both directions as the camera comes round.
+  scene.cube(0.0, 2.3, 0.0, 0.5, 0.5, 0.5, "#ffe9a0", 0.55, 96.0);
+}
+
+Window("A lit scene", 900px, 700px) {
+  background: #0b0e14;
+  layout: column;
+  padding: 10px;
+  spacing: 8px;
+
+  Label {
+    id: "caption";
+    text: "solid and glass, three lights";
+    color: #8b98a8;
+    font-size: 13px;
+  }
+
+  Scene {
+    id: "stage";
+    width: 870px;
+    height: 630px;
+    background: #0b0e14;
+    onDraw: {
+      main_scene();
+    };
+  }
+
+  Timer {
+    interval: 16ms;
+    onTick: {
+      angle = angle + 0.006;
+    };
+  }
+}

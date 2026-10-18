@@ -1,0 +1,10 @@
+#version 450
+layout(local_size_x=3) in;
+layout(set=0,binding=0,std430) buffer Vertices{vec4 positions[];} target;
+void main(){
+    uint i=gl_GlobalInvocationID.x;
+    float x=-1.0;float y=-1.0;
+    if(i==1u)x=3.0;
+    if(i==2u)y=3.0;
+    target.positions[i]=vec4(x,y,0.0,1.0);
+}

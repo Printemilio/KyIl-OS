@@ -1,0 +1,21 @@
+// The shortest window you can write: a label and a button.
+
+Window("Test GUI", 300px, 200px) {
+  background: #1e1e1e;
+  layout: column;
+  spacing: 10px;
+  padding: 16px;
+
+  Label {
+    id: "hello";
+    text: "Hello from Suchu!";
+    font-size: 20px;
+    color: #ffffff;
+  }
+
+  Button {
+    id: "ok";
+    text: "OK";
+    onClick: { print("Clicked!"); };
+  }
+}

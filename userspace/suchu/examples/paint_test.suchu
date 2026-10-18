@@ -1,0 +1,17 @@
+import "paint_model.suchu";
+import textbytes;
+checks=0;
+fun check(ok) { if !ok { textbytes.fail("Paint document invariant failed"); } checks=checks+1; }
+d=paint_model.create();
+paint_model.stamp(d,-1,0); paint_model.stamp(d,640,0); check(len(d.stamps)==0);
+paint_model.stroke(d,10,10,13,12); check(len(d.stamps)==4);
+check(d.stamps[1][0]==11 && d.stamps[1][1]==10);
+paint_model.clear(d); paint_model.stroke(d,13,12,10,10);
+check(d.stamps[1][0]==12 && d.stamps[1][1]==12);
+d.eraser=true; paint_model.stamp(d,0,0); check(d.stamps[4][3]==14277081);
+paint_model.clear(d);
+for i in 0..4200 { paint_model.stamp(d,0,0); }
+check(len(d.stamps)==4096); paint_model.clear(d); check(len(d.stamps)==0);
+for phase in 2..5 { for f in 0..15 { paint_model.replay(d,phase,f); } }
+check(len(d.stamps)==3584); check(paint_model.checksum(d)==543696415);
+print("Paint Suchu model checks: " @ checks @ " passed");

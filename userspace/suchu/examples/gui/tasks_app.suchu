@@ -1,0 +1,183 @@
+// A small task manager. Shows records for structured state, len() for sizes,
+// try/else for file access that is allowed to fail, and JSON for persistence.
+
+tasks = [];
+tasks_file = "suchu_tasks.json";
+
+fun tasks_text() {
+  if len(tasks) == 0 {
+    return "No tasks yet. Add your first one!";
+  }
+
+  previews = [];
+  for task in tasks {
+    if len(previews) < 5 {
+      // Each task is a record, so it can carry more than a title later.
+      push(previews, truncate(task.title, 72));
+    }
+  }
+
+  result = "Tasks:  " @ "   |   ".join(previews);
+  if len(tasks) > 5 {
+    result = result @ "   |   +" @ (len(tasks) - 5) @ " more";
+  }
+  return result;
+}
+
+fun refresh_display() {
+  set_text(tasks_label, tasks_text());
+  set_text(status_label, "" @ len(tasks) @ " task(s)");
+}
+
+fun save_tasks() {
+  try {
+    write_file(tasks_file, json.encode(tasks));
+    set_text(status_label, "Saved " @ len(tasks) @ " task(s)");
+  } else e {
+    set_text(status_label, "Could not save: " @ e.message);
+  }
+}
+
+fun load_tasks() {
+  tasks.clear();
+
+  // A missing or corrupt file is normal on first run, not a crash.
+  try {
+    loaded = json.decode(read_file(tasks_file));
+    for entry in loaded {
+      push(tasks, entry);
+    }
+    refresh_display();
+  } else e {
+    refresh_display();
+    set_text(status_label, "Nothing saved yet");
+  }
+}
+
+fun add_task() {
+  title = truncate(get_text(task_input), 120);
+  if title == "" {
+    set_text(status_label, "Type a task first");
+    return none;
+  }
+
+  push(tasks, { title: title; done: false; });
+  set_text(task_input, "");
+  refresh_display();
+  save_tasks();
+}
+
+fun remove_last_task() {
+  if len(tasks) == 0 {
+    set_text(status_label, "Nothing to remove");
+    return none;
+  }
+
+  removed = pull(tasks);
+  refresh_display();
+  save_tasks();
+  set_text(status_label, "Removed: " @ removed.title);
+}
+
+fun clear_tasks() {
+  tasks.clear();
+  refresh_display();
+  save_tasks();
+  set_text(status_label, "All tasks cleared");
+}
+
+import json;
+
+Window("Suchu Tasks", 760px, 410px) {
+  background: #0b1020;
+  layout: column;
+  padding: 30px;
+  spacing: 16px;
+
+  Label {
+    text: "Suchu Tasks";
+    font-size: 30px;
+    font-weight: bold;
+    color: #f8fafc;
+  }
+
+  Label {
+    text: "A tiny task manager, built with Suchu.";
+    font-size: 15px;
+    color: #94a3b8;
+  }
+
+  Label {
+    id: "tasks_label";
+    text: "Click Load to restore saved tasks";
+    font-size: 16px;
+    color: #e2e8f0;
+    background: #182033;
+    border-radius: 14px;
+    padding: 18px;
+    width: 700px;
+    height: 82px;
+  }
+
+  Input {
+    id: "task_input";
+    placeholder: "What needs to be done?";
+    width: 700px;
+    height: 50px;
+    background: #182033;
+    border-radius: 12px;
+    padding: 14px;
+    font-size: 16px;
+  }
+
+  Row {
+    spacing: 12px;
+
+    Button {
+      text: "Add task";
+      width: 145px;
+      height: 46px;
+      background: #6366f1;
+      color: #ffffff;
+      border-radius: 11px;
+      onClick: { add_task(); };
+    }
+
+    Button {
+      text: "Remove last";
+      width: 155px;
+      height: 46px;
+      background: #334155;
+      color: #f8fafc;
+      border-radius: 11px;
+      onClick: { remove_last_task(); };
+    }
+
+    Button {
+      text: "Load";
+      width: 120px;
+      height: 46px;
+      background: #0ea5e9;
+      color: #ffffff;
+      border-radius: 11px;
+      onClick: { load_tasks(); };
+    }
+
+    Button {
+      text: "Clear all";
+      width: 130px;
+      height: 46px;
+      background: #ef4444;
+      color: #ffffff;
+      border-radius: 11px;
+      onClick: { clear_tasks(); };
+    }
+  }
+
+  Label {
+    id: "status_label";
+    text: "Ready";
+    color: #94a3b8;
+    font-size: 14px;
+  }
+}

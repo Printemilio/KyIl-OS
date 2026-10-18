@@ -11,6 +11,9 @@
 typedef void (*ethernet_handler_t)(const uint8_t *src_mac, const void *payload, size_t size);
 
 void ethernet_init(void);
+void ethernet_service_start(void);
+void ethernet_wake(void);
+void ethernet_wake_irq(void);
 int ethernet_send(const uint8_t dest_mac[6], uint16_t ethertype, const void *payload, size_t size);
 int ethernet_poll(void);
 void ethernet_register_handler(uint16_t ethertype, ethernet_handler_t handler);

@@ -1,0 +1,63 @@
+// A variable first assigned inside a block belongs to that block. The compiler
+// expresses this with OCaml's own 'let ... in', so the question is whether the
+// two agree about where a name stops existing and which name an assignment
+// reaches.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun main() {
+  outer = "outer";
+  show("start = ", outer);
+
+  // Assigning to an existing name from a nested block changes that name.
+  if (true) {
+    outer = "changed";
+  }
+  show("after block = ", outer);
+
+  // A name introduced in a block, used in the same block.
+  if (true) {
+    inner = "inner";
+    show("inside = ", inner);
+  }
+
+  // The same again in a loop body, once per turn.
+  i = 0;
+  while (i < 3) {
+    fresh = i * 10;
+    show("fresh = ", fresh);
+    i = i + 1;
+  }
+
+  // A loop variable updated from a nested branch.
+  count = 0;
+  i = 0;
+  while (i < 6) {
+    if (i % 2 == 0) {
+      count = count + 1;
+    }
+    i = i + 1;
+  }
+  show("evens counted = ", count);
+
+  // A function's local of the same name as a global one.
+  show("shadowed = ", shadow());
+  show("global intact = ", outer);
+
+  // A parameter shadowing a global.
+  show("param shadow = ", takes_outer("argument"));
+  show("global still = ", outer);
+}
+
+fun shadow() {
+  outer = "local";
+  return outer;
+}
+
+fun takes_outer(outer) {
+  return outer;
+}
+
+main();

@@ -1,0 +1,118 @@
+// The compiler may keep a variable as a native integer when every assignment to
+// it is an integer. Getting that wrong does not make a program slow, it makes it
+// wrong, so this is where the decision is cornered: variables that qualify,
+// variables that must not, and the places where an integer has to become a value
+// again.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun main() {
+  // Plainly an integer, and stays one.
+  counter = 0;
+  while (counter < 5) { counter = counter + 1; }
+  show("counted to ", counter);
+  show("its type is ", type(counter));
+
+  // Arithmetic that keeps to the integers.
+  a = 7;
+  b = 3;
+  show("a + b = ", a + b);
+  show("a - b = ", a - b);
+  show("a * b = ", a * b);
+  show("a % b = ", a % b);
+  show("-a = ", -a);
+  show("nested = ", (a + b) * (a - b) % 5);
+
+  // Wrapping, which native addition and the boxed operator must do alike.
+  big = 4611686018427387903;
+  big = big + big;
+  show("wrapped = ", big);
+  show("still an int = ", type(big));
+
+  // Division always leaves the integers, so this variable is not one.
+  divided = 7;
+  divided = divided / 2;
+  show("divided = ", divided);
+  show("its type is ", type(divided));
+
+  // Neither is a power, which leaves them as soon as it overflows.
+  raised = 2;
+  raised = raised ** 3;
+  show("raised = ", raised);
+  show("its type is ", type(raised));
+
+  // A variable given a string later is never an integer.
+  mixed = 1;
+  mixed = "now a string";
+  show("mixed = ", mixed);
+
+  // Nor one given a float on a branch that may not even run.
+  maybe = 10;
+  if (false) { maybe = 1.5; }
+  show("maybe = ", maybe);
+  show("its type is ", type(maybe));
+
+  // An integer used where a value is wanted has to be boxed again.
+  n = 42;
+  show("in a list = ", [n, n + 1]);
+  show("in a record = ", { value: n; });
+  show("in a set = ", set {n, n});
+  show("concatenated = ", "n is " @ n);
+  show("compared to a float = ", n < 42.5);
+  show("equal to a float = ", n == 42.0);
+  show("passed to a builtin = ", abs(-n));
+  show("indexing with it = ", [10, 20, 30][n % 3]);
+  show("as a range bound = ", 1..(n % 4));
+
+  // Comparisons between two integers, which compile to native ones.
+  x = 3;
+  y = 4;
+  show("x < y = ", x < y);
+  show("x <= x = ", x <= x);
+  show("x > y = ", x > y);
+  show("x >= y = ", x >= y);
+  show("x == y = ", x == y);
+  show("x != y = ", x != y);
+
+  // Stepping keeps the type.
+  step = 5;
+  show("step++ gave ", step++);
+  show("step is now ", step);
+  show("step-- gave ", step--);
+  show("step is now ", step);
+  show("its type is ", type(step));
+
+  // Modulo by zero still raises, and says the same thing.
+  zero = 0;
+  try { show("never printed ", 10 % zero); } else e { show("caught: ", e.message); }
+
+  // An integer read inside a closure, and written by one.
+  shared = 100;
+  reader = fun() { return shared; };
+  show("read through a closure = ", reader());
+
+  // A loop variable comes from a list, so it is a value and not an integer.
+  total = 0;
+  for (item in [1, 2, 3]) { total = total + item; }
+  show("summed = ", total);
+  show("total's type is ", type(total));
+
+  // A function's parameter arrives as a value; its own locals may still be
+  // integers.
+  show("in a function = ", triangle(5));
+}
+
+fun triangle(n) {
+  sum = 0;
+  i = 1;
+  while (i <= 100) {
+    if (i > 4) { break; }
+    sum = sum + i;
+    i = i + 1;
+  }
+  return sum;
+}
+
+main();

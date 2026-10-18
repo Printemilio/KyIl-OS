@@ -1,0 +1,105 @@
+{
+  "format": 1,
+  "minor": 1,
+  "engine_min": 2,
+  "name": "dma-memory-test",
+  "platform": "test.dma-memory",
+  "bus": "platform",
+  "class": "character",
+  "features": [
+    "base",
+    "buffer",
+    "dma"
+  ],
+  "resources": [
+    {
+      "kind": "dma",
+      "length": 4096,
+      "rights": [
+        "read",
+        "write"
+      ],
+      "widths": 15
+    }
+  ],
+  "scratch": 16,
+  "entries": {
+    "probe": [
+      {
+        "op": "ret"
+      }
+    ],
+    "init": [
+      {
+        "op": "const",
+        "dst": 0,
+        "imm": 0
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 4096
+      },
+      {
+        "op": "dma",
+        "dst": 16,
+        "aux": 1,
+        "imm": 0
+      },
+      {
+        "op": "mov",
+        "dst": 0,
+        "a": 16
+      },
+      {
+        "op": "const",
+        "dst": 1,
+        "imm": 32
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 4
+      },
+      {
+        "op": "const",
+        "dst": 3,
+        "imm": 305419896
+      },
+      {
+        "op": "dma",
+        "dst": 17,
+        "aux": 4,
+        "imm": 0
+      },
+      {
+        "op": "dma",
+        "dst": 8,
+        "aux": 3,
+        "imm": 0
+      },
+      {
+        "op": "mov",
+        "dst": 9,
+        "a": 16
+      },
+      {
+        "op": "dma",
+        "dst": 17,
+        "aux": 2,
+        "imm": 0
+      },
+      {
+        "op": "ret"
+      }
+    ],
+    "stop": [
+      {
+        "op": "ret"
+      }
+    ]
+  },
+  "info": {
+    "purpose": "Memory-only regression fixture; no PCI/MMIO/IRQ authority or hardware DMA"
+  }
+}

@@ -6,6 +6,7 @@
 void dhcp_init(void);
 void dhcp_start(void);
 void dhcp_start_async(void);
+uint64_t dhcp_service(void);
 uint32_t dhcp_offered_ip(void);
 uint32_t dhcp_netmask(void);
 uint32_t dhcp_gateway(void);

@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <unos/boot_requests.h>
-#include <unos/mrac.h>
+#include <unos/kernel_allocator.h>
 #include <unos/pmm.h>
 #include <unos/scheduler.h>
 #include <unos/vmm.h>
@@ -26,6 +26,7 @@ _Static_assert(sizeof(struct heap_block) == HEAP_ALIGNMENT, "heap block headers 
 static uint8_t *heap_start;
 static uint8_t *heap_end;
 static bool heap_ready;
+uint64_t heap_bootstrap_bytes(void){return heap_ready?(uint64_t)(heap_end-heap_start):0;}
 
 static uint64_t align_up(uint64_t value, uint64_t alignment) {
     return (value + alignment - 1ull) & ~(alignment - 1ull);
@@ -225,15 +226,37 @@ static int pointer_in_bootstrap_heap(const void *ptr) {
 }
 
 void *kmalloc(size_t size) {
-    if (MRAC_primary_allocator_active()) {
+    if (kernel_allocator_active()) {
         const uint32_t pid = scheduler_current_pid();
-        void *ptr = MRAC_alloc(pid, size);
+        void *ptr = kernel_allocator_alloc(pid, size);
         if (ptr != NULL) {
             return ptr;
         }
     }
 
     return bootstrap_kmalloc(size);
+}
+
+void *kmalloc_aligned(size_t size, size_t alignment) {
+    uintptr_t raw_addr;
+    uintptr_t aligned_addr;
+    void *raw;
+
+    if (size == 0u || alignment < sizeof(void *) ||
+        (alignment & (alignment - 1u)) != 0u ||
+        size > SIZE_MAX - alignment - sizeof(void *)) {
+        return NULL;
+    }
+
+    raw = kmalloc(size + alignment - 1u + sizeof(void *));
+    if (raw == NULL) {
+        return NULL;
+    }
+
+    raw_addr = (uintptr_t)raw;
+    aligned_addr = (raw_addr + sizeof(void *) + alignment - 1u) & ~(alignment - 1u);
+    ((void **)aligned_addr)[-1] = raw;
+    return (void *)aligned_addr;
 }
 
 void kfree(void *ptr) {
@@ -246,9 +269,16 @@ void kfree(void *ptr) {
         return;
     }
 
-    if (MRAC_primary_allocator_active()) {
-        MRAC_free(ptr);
+    if (kernel_allocator_active()) {
+        kernel_allocator_free(ptr);
     }
+}
+
+void kfree_aligned(void *ptr) {
+    if (ptr == NULL) {
+        return;
+    }
+    kfree(((void **)ptr)[-1]);
 }
 
 void *krealloc(void *ptr, size_t size) {
@@ -263,9 +293,9 @@ void *krealloc(void *ptr, size_t size) {
         return NULL;
     }
 
-    if (pointer_in_bootstrap_heap(ptr) || !MRAC_primary_allocator_active()) {
+    if (pointer_in_bootstrap_heap(ptr) || !kernel_allocator_active()) {
         return bootstrap_krealloc(ptr, size);
     }
 
-    return MRAC_realloc(pid, ptr, size);
+    return kernel_allocator_realloc(pid, ptr, size);
 }

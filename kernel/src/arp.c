@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <unos/ethernet.h>
+#include <unos/scheduler.h>
 
 #define ARP_CACHE_SIZE 32u
 #define ARP_HTYPE_ETHERNET 0x0001u
@@ -11,6 +12,15 @@
 #define ARP_PLEN_IPV4 4u
 #define ARP_OP_REQUEST 1u
 #define ARP_OP_REPLY 2u
+#define ARP_WAITER_COUNT 16u
+#define ARP_RETRY_TICKS 100u
+
+typedef struct {
+    uint32_t ip;
+    uint32_t tid;
+    volatile uint8_t woken;
+    uint8_t used;
+} arp_waiter_t;
 
 typedef struct {
     uint16_t htype;
@@ -31,7 +41,26 @@ typedef struct {
 } arp_entry_t;
 
 static arp_entry_t cache[ARP_CACHE_SIZE];
+static arp_waiter_t waiters[ARP_WAITER_COUNT];
 static uint32_t local_ip;
+
+static uint64_t arp_lock(void) {
+#ifdef VEX_NETWORK_HOST_TEST
+    return 0u;
+#else
+    uint64_t flags;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    return flags;
+#endif
+}
+
+static void arp_unlock(uint64_t flags) {
+#ifdef VEX_NETWORK_HOST_TEST
+    (void)flags;
+#else
+    __asm__ volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+#endif
+}
 
 static uint16_t bswap16(uint16_t value) {
     return (uint16_t)((value << 8u) | (value >> 8u));
@@ -66,11 +95,19 @@ static int mac_is_zero(const uint8_t mac[6]) {
 }
 
 static void cache_store(uint32_t ip, const uint8_t mac[6]) {
+    uint64_t flags = arp_lock();
     arp_entry_t *free_entry = NULL;
 
     for (size_t i = 0; i < ARP_CACHE_SIZE; ++i) {
         if (cache[i].used && cache[i].ip == ip) {
             copy_mac(cache[i].mac, mac);
+            for (size_t j = 0; j < ARP_WAITER_COUNT; ++j) {
+                if (waiters[j].used && waiters[j].ip == ip) {
+                    waiters[j].woken = 1u;
+                    process_wake(waiters[j].tid);
+                }
+            }
+            arp_unlock(flags);
             return;
         }
         if (!cache[i].used && free_entry == NULL) {
@@ -85,6 +122,13 @@ static void cache_store(uint32_t ip, const uint8_t mac[6]) {
     free_entry->used = 1;
     free_entry->ip = ip;
     copy_mac(free_entry->mac, mac);
+    for (size_t j = 0; j < ARP_WAITER_COUNT; ++j) {
+        if (waiters[j].used && waiters[j].ip == ip) {
+            waiters[j].woken = 1u;
+            process_wake(waiters[j].tid);
+        }
+    }
+    arp_unlock(flags);
 }
 
 static void arp_send(uint16_t op, const uint8_t dest_mac[6], uint32_t target_ip, const uint8_t target_mac[6]) {
@@ -136,6 +180,9 @@ void arp_init(void) {
         cache[i].ip = 0;
         zero_mac(cache[i].mac);
     }
+    for (size_t i = 0; i < ARP_WAITER_COUNT; ++i) {
+        waiters[i] = (arp_waiter_t){0};
+    }
 
     ethernet_register_handler(ETHERNET_TYPE_ARP, arp_handle);
 }
@@ -162,13 +209,70 @@ int arp_lookup(uint32_t ip, uint8_t mac[6]) {
         return -1;
     }
 
+    uint64_t flags = arp_lock();
     for (size_t i = 0; i < ARP_CACHE_SIZE; ++i) {
         if (cache[i].used && cache[i].ip == ip && !mac_is_zero(cache[i].mac)) {
             copy_mac(mac, cache[i].mac);
+            arp_unlock(flags);
             return 0;
         }
     }
+    arp_unlock(flags);
     return -1;
+}
+
+int arp_wait_for(uint32_t ip, uint8_t mac[6], uint64_t timeout_ticks) {
+    if (mac == NULL || ip == 0u || timeout_ticks == 0u) return -1;
+    const uint32_t tid = scheduler_current_tid();
+    if (tid == 0u) return -1;
+
+    uint64_t flags = arp_lock();
+    for (size_t i = 0; i < ARP_CACHE_SIZE; ++i) {
+        if (cache[i].used && cache[i].ip == ip && !mac_is_zero(cache[i].mac)) {
+            copy_mac(mac, cache[i].mac);
+            arp_unlock(flags);
+            return 0;
+        }
+    }
+    arp_waiter_t *waiter = NULL;
+    for (size_t i = 0; i < ARP_WAITER_COUNT; ++i) {
+        if (!waiters[i].used) { waiter = &waiters[i]; break; }
+    }
+    if (waiter == NULL) { arp_unlock(flags); return -1; }
+    *waiter = (arp_waiter_t){ .ip = ip, .tid = tid, .used = 1u };
+    arp_unlock(flags);
+
+    const uint64_t now = scheduler_ticks_now();
+    const uint64_t deadline = timeout_ticks > UINT64_MAX - now
+        ? UINT64_MAX : now + timeout_ticks;
+    uint64_t next_retry = now;
+    int result = -1;
+    for (;;) {
+        if (arp_lookup(ip, mac) == 0) { result = 0; break; }
+        const uint64_t current = scheduler_ticks_now();
+        if (current >= deadline) break;
+        if (current >= next_retry) {
+            (void)arp_request(ip);
+            next_retry = ARP_RETRY_TICKS > UINT64_MAX - current
+                ? UINT64_MAX : current + ARP_RETRY_TICKS;
+        }
+        uint64_t wait = deadline - current;
+        if (next_retry > current && next_retry - current < wait)
+            wait = next_retry - current;
+        flags = arp_lock();
+        if (waiter->woken != 0u) {
+            waiter->woken = 0u;
+            arp_unlock(flags);
+            continue;
+        }
+        arp_unlock(flags);
+        process_wait_event_timeout(&waiter->woken, wait);
+    }
+
+    flags = arp_lock();
+    *waiter = (arp_waiter_t){0};
+    arp_unlock(flags);
+    return result;
 }
 
 int arp_request(uint32_t target_ip) {

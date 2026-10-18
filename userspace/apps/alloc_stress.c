@@ -89,6 +89,50 @@ static void log_phase(const char* name, uint64_t ops, uint64_t bytes, uint64_t e
     log_text(line);
 }
 
+static void log_alloc_detail(const char* label, size_t slot, uint32_t version, uintptr_t addr, size_t size)
+{
+    char line[224];
+    size_t pos = 0u;
+
+    pos = append_text(line, pos, sizeof(line), "mrac_bench: ");
+    pos = append_text(line, pos, sizeof(line), label);
+    pos = append_text(line, pos, sizeof(line), " slot=");
+    pos = append_u64(line, pos, sizeof(line), slot);
+    pos = append_text(line, pos, sizeof(line), " version=");
+    pos = append_u64(line, pos, sizeof(line), version);
+    pos = append_text(line, pos, sizeof(line), " addr=");
+    pos = append_u64(line, pos, sizeof(line), (uint64_t)addr);
+    pos = append_text(line, pos, sizeof(line), " size=");
+    pos = append_u64(line, pos, sizeof(line), size);
+    pos = append_text(line, pos, sizeof(line), "\n");
+    (void)pos;
+    log_text(line);
+}
+
+static void log_alloc_mismatch(size_t slot, uint32_t version, uintptr_t addr, size_t size, size_t offset, uint8_t expected, uint8_t actual)
+{
+    char line[256];
+    size_t pos = 0u;
+
+    pos = append_text(line, pos, sizeof(line), "mrac_bench: alloc mismatch slot=");
+    pos = append_u64(line, pos, sizeof(line), slot);
+    pos = append_text(line, pos, sizeof(line), " version=");
+    pos = append_u64(line, pos, sizeof(line), version);
+    pos = append_text(line, pos, sizeof(line), " addr=");
+    pos = append_u64(line, pos, sizeof(line), (uint64_t)addr);
+    pos = append_text(line, pos, sizeof(line), " size=");
+    pos = append_u64(line, pos, sizeof(line), size);
+    pos = append_text(line, pos, sizeof(line), " off=");
+    pos = append_u64(line, pos, sizeof(line), offset);
+    pos = append_text(line, pos, sizeof(line), " expected=");
+    pos = append_u64(line, pos, sizeof(line), expected);
+    pos = append_text(line, pos, sizeof(line), " actual=");
+    pos = append_u64(line, pos, sizeof(line), actual);
+    pos = append_text(line, pos, sizeof(line), "\n");
+    (void)pos;
+    log_text(line);
+}
+
 static uint64_t now_ms(void)
 {
     vex_bulk_result_t result;
@@ -125,6 +169,24 @@ static int check_pattern(const uint8_t* buffer, size_t size, uint64_t key, uint3
         }
     }
     return 1;
+}
+
+static size_t first_pattern_mismatch(const uint8_t* buffer, size_t size, uint64_t key, uint32_t version, uint8_t* expected_out, uint8_t* actual_out)
+{
+    uint8_t seed = (uint8_t)(key ^ version);
+    for (size_t i = 0; i < size; ++i) {
+        uint8_t expected = (uint8_t)(seed + (uint8_t)(i * 13u));
+        if (buffer[i] != expected) {
+            if (expected_out != 0) {
+                *expected_out = expected;
+            }
+            if (actual_out != 0) {
+                *actual_out = buffer[i];
+            }
+            return i;
+        }
+    }
+    return size;
 }
 
 static void record_version(size_t key_index, uint32_t version)
@@ -350,58 +412,137 @@ static int phase_allocator_churn(void)
 {
     void* slots[ALLOC_SLOTS];
     size_t sizes[ALLOC_SLOTS];
-    uint8_t seeds[ALLOC_SLOTS];
+    uint32_t versions[ALLOC_SLOTS];
     phase_stats_t stats;
 
     for (size_t i = 0; i < ALLOC_SLOTS; ++i) {
         slots[i] = 0;
         sizes[i] = 0u;
-        seeds[i] = 0u;
+        versions[i] = 0u;
     }
 
     stats.ops = 0u;
     stats.bytes = 0u;
     stats.start_ms = now_ms();
 
+    for (size_t i = 0; i < ALLOC_SLOTS; ++i) {
+        size_t size = (i * 67u) % 12288u + 4096u;
+        vex_mmap_req_t req;
+        uint8_t* ptr;
+
+        req.addr = 0;
+        req.length = size;
+        req.prot = PROT_READ | PROT_WRITE;
+        req.flags = MAP_PRIVATE | MAP_ANONYMOUS;
+        req.fd = -1;
+        req.offset = 0;
+        ptr = (uint8_t*)(uintptr_t)vex_syscall1(VEX_SYS_MMAP, (uint64_t)&req);
+        if (ptr == MAP_FAILED) {
+            log_text("mrac_bench: alloc churn mmap failed\n");
+            return 14;
+        }
+        versions[i] = 1u;
+        fill_pattern(ptr, size, i, versions[i]);
+        slots[i] = ptr;
+        sizes[i] = size;
+        ++stats.ops;
+        stats.bytes += size;
+    }
+
     for (size_t round = 0; round < ALLOC_ROUNDS; ++round) {
         for (size_t i = 0; i < ALLOC_SLOTS; ++i) {
-            size_t size = ((round * 131u) + (i * 67u)) % 3000u + 1u;
-            uint8_t* ptr = (uint8_t*)malloc(size);
-            if (ptr == 0) {
-                log_text("mrac_bench: alloc churn malloc failed\n");
-                return 14;
-            }
-            fill_pattern(ptr, size, i, round + 1u);
-            slots[i] = ptr;
-            sizes[i] = size;
-            seeds[i] = (uint8_t)(round + i);
-            ++stats.ops;
-            stats.bytes += size;
-        }
-
-        for (size_t i = 0; i < ALLOC_SLOTS; ++i) {
-            size_t new_size = ((round * 193u) + (i * 29u)) % 3000u + 1u;
+            size_t new_size = ((round * 193u) + (i * 29u)) % 16384u + 4096u;
             size_t keep = sizes[i] < new_size ? sizes[i] : new_size;
             size_t verify = keep < VERIFY_LIMIT ? keep : VERIFY_LIMIT;
-            uint8_t* resized = (uint8_t*)realloc(slots[i], new_size);
-            if (resized == 0) {
-                log_text("mrac_bench: alloc churn realloc failed\n");
-                return 15;
-            }
-            if (verify != 0u && !check_pattern(resized, verify, i, round + 1u)) {
+            vex_mmap_req_t req;
+            vex_memory_req_t unmap;
+            uint8_t* resized;
+
+            if (verify != 0u && !check_pattern((const uint8_t*)slots[i], verify, i, versions[i])) {
+                uint8_t expected = 0u;
+                uint8_t actual = 0u;
+                size_t mismatch = first_pattern_mismatch((const uint8_t*)slots[i], verify, i, versions[i], &expected, &actual);
+                log_alloc_detail("alloc churn verify detail", i, versions[i], (uintptr_t)slots[i], sizes[i]);
+                log_alloc_mismatch(i, versions[i], (uintptr_t)slots[i], sizes[i], mismatch, expected, actual);
                 log_text("mrac_bench: alloc churn verify failed\n");
                 return 16;
             }
-            fill_pattern(resized, new_size, i, round + 1u);
+
+            req.addr = 0;
+            req.length = new_size;
+            req.prot = PROT_READ | PROT_WRITE;
+            req.flags = MAP_PRIVATE | MAP_ANONYMOUS;
+            req.fd = -1;
+            req.offset = 0;
+            resized = (uint8_t*)(uintptr_t)vex_syscall1(VEX_SYS_MMAP, (uint64_t)&req);
+            if (resized == MAP_FAILED) {
+                log_text("mrac_bench: alloc churn remap mmap failed\n");
+                return 15;
+            }
+
+            for (size_t other = 0; other < ALLOC_SLOTS; ++other) {
+                uintptr_t a_start;
+                uintptr_t a_end;
+                uintptr_t b_start;
+                uintptr_t b_end;
+
+                if (slots[other] == 0 || sizes[other] == 0u) {
+                    continue;
+                }
+
+                a_start = (uintptr_t)resized;
+                a_end = a_start + new_size;
+                b_start = (uintptr_t)slots[other];
+                b_end = b_start + sizes[other];
+                if (a_start < b_end && b_start < a_end) {
+                    log_alloc_detail("alloc churn overlap detail", i, versions[i], (uintptr_t)resized, new_size);
+                    log_text("mrac_bench: alloc churn mmap overlap\n");
+                    return 20;
+                }
+            }
+
+            for (size_t byte_index = 0; byte_index < keep; ++byte_index) {
+                resized[byte_index] = ((uint8_t*)slots[i])[byte_index];
+            }
+
+            unmap.addr = slots[i];
+            unmap.length = sizes[i];
+            unmap.prot_or_advice = 0;
+            if ((int64_t)vex_syscall1(VEX_SYS_MUNMAP, (uint64_t)&unmap) != 0) {
+                log_text("mrac_bench: alloc churn munmap old failed\n");
+                return 17;
+            }
+
             slots[i] = resized;
             sizes[i] = new_size;
+            ++versions[i];
+            fill_pattern(resized, new_size, i, versions[i]);
             ++stats.ops;
             stats.bytes += new_size;
         }
     }
 
     for (size_t i = 0; i < ALLOC_SLOTS; ++i) {
-        free(slots[i]);
+        vex_memory_req_t unmap;
+        size_t verify = sizes[i] < VERIFY_LIMIT ? sizes[i] : VERIFY_LIMIT;
+
+        if (verify != 0u && !check_pattern((const uint8_t*)slots[i], verify, i, versions[i])) {
+            uint8_t expected = 0u;
+            uint8_t actual = 0u;
+            size_t mismatch = first_pattern_mismatch((const uint8_t*)slots[i], verify, i, versions[i], &expected, &actual);
+            log_alloc_detail("alloc churn final verify detail", i, versions[i], (uintptr_t)slots[i], sizes[i]);
+            log_alloc_mismatch(i, versions[i], (uintptr_t)slots[i], sizes[i], mismatch, expected, actual);
+            log_text("mrac_bench: alloc churn final verify failed\n");
+            return 19;
+        }
+
+        unmap.addr = slots[i];
+        unmap.length = sizes[i];
+        unmap.prot_or_advice = 0;
+        if ((int64_t)vex_syscall1(VEX_SYS_MUNMAP, (uint64_t)&unmap) != 0) {
+            log_text("mrac_bench: alloc churn munmap final failed\n");
+            return 18;
+        }
         ++stats.ops;
     }
 

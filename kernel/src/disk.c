@@ -1,11 +1,24 @@
 #include <unos/disk.h>
+#include <unos/ata_pio.h>
+#include <unos/sched_clock.h>
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include <unos/boot_requests.h>
+#include <unos/debug_log.h>
 #include <unos/heap.h>
 #include <unos/pmm.h>
 #include <unos/vmm.h>
+#include <unos/hardware_resources.h>
+#include <unos/scheduler.h>
+#include <unos/kernel_guard.h>
+/* One command slot/bounce area per backend, not a kernel-wide lock. Hardware
+ * completion is polled and IRQ paths do not touch these transactions. */
+static kernel_gate_t disk_data_gate=KERNEL_GATE_INIT;
+static kernel_gate_t cdrom_io_gate=KERNEL_GATE_INIT;
+static kernel_gate_t ata_channel_gate=KERNEL_GATE_INIT;
+static ata_pio_t ide_disk;
 
 #define PCI_CONFIG_ADDRESS 0xcf8u
 #define PCI_CONFIG_DATA 0xcfcu
@@ -28,6 +41,9 @@
 #define AHCI_FIS_TYPE_REG_H2D 0x27u
 #define AHCI_DEVICE_LBA 0x40u
 #define AHCI_PORT_CMD_ST 0x0001u
+#define AHCI_PORT_CMD_SUD 0x0002u
+#define AHCI_PORT_CMD_POD 0x0004u
+#define AHCI_GHC_AE 0x80000000u
 #define AHCI_PORT_CMD_FRE 0x0010u
 #define AHCI_PORT_CMD_FR 0x4000u
 #define AHCI_PORT_CMD_CR 0x8000u
@@ -42,6 +58,7 @@
 
 typedef enum {
     DISK_NONE,
+    DISK_IDE,
     DISK_AHCI,
     DISK_NVME
 } disk_backend_t;
@@ -88,9 +105,12 @@ typedef volatile struct {
     uint32_t ci;
     uint32_t sntf;
     uint32_t fbs;
-    uint8_t reserved1[0x80 - 0x48];
-    uint8_t vendor[0x80];
+    uint8_t reserved1[0x70 - 0x44];
+    uint8_t vendor[0x10];
 } ahci_port_t;
+
+/* Port registers repeat every 0x80 bytes from HBA offset 0x100. */
+_Static_assert(sizeof(ahci_port_t) == 0x80, "AHCI port register block is 0x80 bytes");
 
 typedef struct {
     uint8_t cfl;
@@ -265,6 +285,7 @@ static void copy_bytes(void *dst, const void *src, uint64_t size) {
 }
 
 static void *map_mmio(uint64_t phys, uint64_t length) {
+    if(hardware_native_mmio(phys,length)!=0)return NULL;
     const uint64_t phys_base = align_down(phys, PAGE_SIZE);
     const uint64_t phys_offset = phys - phys_base;
     const uint64_t mapped_length = align_up(length + phys_offset, PAGE_SIZE);
@@ -279,25 +300,11 @@ static void *map_mmio(uint64_t phys, uint64_t length) {
 }
 
 static uint32_t pci_read32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset) {
-    const uint32_t address = 0x80000000u
-        | ((uint32_t)bus << 16u)
-        | ((uint32_t)device << 11u)
-        | ((uint32_t)function << 8u)
-        | (offset & 0xfcu);
-
-    outl(PCI_CONFIG_ADDRESS, address);
-    return inl(PCI_CONFIG_DATA);
+    return hardware_pci_read32(bus,device,function,offset);
 }
 
 static void pci_write32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value) {
-    const uint32_t address = 0x80000000u
-        | ((uint32_t)bus << 16u)
-        | ((uint32_t)device << 11u)
-        | ((uint32_t)function << 8u)
-        | (offset & 0xfcu);
-
-    outl(PCI_CONFIG_ADDRESS, address);
-    outl(PCI_CONFIG_DATA, value);
+    hardware_pci_write32(bus,device,function,offset,value);
 }
 
 static uint64_t pci_bar(pci_device_t device, uint8_t bar) {
@@ -316,10 +323,12 @@ static uint64_t pci_bar(pci_device_t device, uint8_t bar) {
     return low & ~0xfull;
 }
 
-static void pci_enable_bus_mastering(pci_device_t device) {
+static int pci_enable_bus_mastering(pci_device_t device) {
+    if(hardware_native_pci(device.bus,device.device,device.function)!=0)return -1;
     uint32_t command = pci_read32(device.bus, device.device, device.function, 0x04u);
     command |= 0x0006u;
     pci_write32(device.bus, device.device, device.function, 0x04u, command);
+    return 0;
 }
 
 static int pci_find_storage(uint8_t subclass, pci_device_t *out) {
@@ -357,6 +366,56 @@ static int pci_find_storage(uint8_t subclass, pci_device_t *out) {
     }
 
     return -1;
+}
+
+static void disk_log_hex(uint64_t value) {
+    char text[19];
+    text[0] = '0';
+    text[1] = 'x';
+    for (int i = 0; i < 16; ++i) {
+        const uint32_t nibble = (uint32_t)(value >> (60 - 4 * i)) & 0xfu;
+        text[2 + i] = (char)(nibble < 10u ? '0' + nibble : 'a' + nibble - 10u);
+    }
+    text[18] = '\0';
+    debug_log_puts(text);
+}
+
+static int ahci_link_up(ahci_port_t *port) {
+    return (port->ssts & 0x0fu) == 3u && ((port->ssts >> 8u) & 0x0fu) == 1u;
+}
+
+static int ahci_wait_link(ahci_port_t *port, uint64_t timeout_ns) {
+    const uint64_t start = scheduler_time_ns();
+    while (!ahci_link_up(port)) {
+        if (scheduler_time_ns() - start > timeout_ns) return -1;
+    }
+    return 0;
+}
+
+/* Firmware only brings up the device it boots from. Power and spin up every
+ * other port, resetting its link (COMRESET) if no device answers, so disks
+ * on any port are found. Afterwards the device's first register FIS has set
+ * PxSIG, which tells a disk from an optical drive. */
+static void ahci_bring_up_port(ahci_port_t *port) {
+    if (ahci_link_up(port)) {
+        return;
+    }
+    port->cmd |= AHCI_PORT_CMD_SUD | AHCI_PORT_CMD_POD;
+    if (ahci_wait_link(port, 10000000ull) != 0) {
+        port->sctl = (port->sctl & ~0x0fu) | 1u;
+        const uint64_t start = scheduler_time_ns();
+        while (scheduler_time_ns() - start < 2000000ull) {
+        }
+        port->sctl &= ~0x0fu;
+        if (ahci_wait_link(port, 50000000ull) != 0) {
+            return; /* nothing connected */
+        }
+    }
+    port->serr = 0xffffffffu;
+    const uint64_t start = scheduler_time_ns();
+    while ((port->tfd & 0x88u) != 0u || port->sig == 0xffffffffu) {
+        if (scheduler_time_ns() - start > 500000000ull) break;
+    }
 }
 
 static int ahci_port_present(ahci_port_t *port) {
@@ -487,21 +546,42 @@ static int ahci_identify(void) {
 }
 
 static int ahci_init(pci_device_t device) {
-    pci_enable_bus_mastering(device);
+    if(pci_enable_bus_mastering(device)!=0)return -1;
 
     ahci.hba = map_mmio(pci_bar(device, 5u), 0x1100u);
     if (ahci.hba == NULL) {
         return -1;
     }
 
+    ahci.hba->ghc |= AHCI_GHC_AE;
     const uint32_t implemented = ahci.hba->pi;
+    debug_log_puts("disk: ahci cap=");
+    disk_log_hex(ahci.hba->cap);
+    debug_log_puts(" pi=");
+    disk_log_hex(implemented);
+    debug_log_puts("\n");
     ahci_port_t *ports = (ahci_port_t *)((uint8_t *)ahci.hba + 0x100u);
+
+    for (uint32_t i = 0; i < AHCI_PORT_COUNT; ++i) {
+        if ((implemented & (1u << i)) != 0) {
+            ahci_bring_up_port(&ports[i]);
+        }
+    }
 
     for (uint32_t i = 0; i < AHCI_PORT_COUNT; ++i) {
         if ((implemented & (1u << i)) == 0) {
             continue;
         }
 
+        if ((ports[i].ssts & 0x0fu) == 3u) {
+            debug_log_puts("disk: ahci port ");
+            disk_log_hex(i);
+            debug_log_puts(" ssts=");
+            disk_log_hex(ports[i].ssts);
+            debug_log_puts(" sig=");
+            disk_log_hex(ports[i].sig);
+            debug_log_puts("\n");
+        }
         if (!ahci_port_present(&ports[i])) {
             continue;
         }
@@ -620,7 +700,7 @@ static int nvme_identify_namespace(void) {
 }
 
 static int nvme_init(pci_device_t device) {
-    pci_enable_bus_mastering(device);
+    if(pci_enable_bus_mastering(device)!=0)return -1;
 
     const uint64_t bar0 = pci_bar(device, 0u);
     nvme.regs = map_mmio(bar0, 0x4000u);
@@ -708,9 +788,60 @@ static int nvme_rw(uint64_t lba, uint32_t count, int write) {
     return nvme_submit_io(&cmd);
 }
 
+static uint8_t ide_read8(void *context,uint16_t port) {
+    (void)context;uint8_t value;__asm__ volatile("inb %1,%0":"=a"(value):"Nd"(port));return value;
+}
+static void ide_write8(void *context,uint16_t port,uint8_t value) {
+    (void)context;__asm__ volatile("outb %0,%1"::"a"(value),"Nd"(port));
+}
+static uint16_t ide_read16(void *context,uint16_t port) {
+    (void)context;uint16_t value;__asm__ volatile("inw %1,%0":"=a"(value):"Nd"(port));return value;
+}
+static void ide_write16(void *context,uint16_t port,uint16_t value) {
+    (void)context;__asm__ volatile("outw %0,%1"::"a"(value),"Nd"(port));
+}
+static uint64_t ide_now(void *context) {(void)context;return sched_clock_ns();}
+static int ide_init(pci_device_t device) {
+    if(hardware_native_pci(device.bus,device.device,device.function))return -1;
+    uint64_t owner=UINT64_C(0x4154410000000000)|((uint64_t)device.bus<<16u)|
+        ((uint64_t)device.device<<8u)|device.function;
+    uint32_t original_command=pci_read32(device.bus,device.device,device.function,4u);
+    ata_io_t io={NULL,ide_read8,ide_write8,ide_read16,ide_write16,ide_now};
+    for(unsigned channel=0;channel<2;++channel) {
+        uint16_t base=channel?0x170u:0x1f0u,control=channel?0x376u:0x3f6u;
+        if(device.prog_if&(1u<<(channel*2u))) {
+            uint32_t b=pci_read32(device.bus,device.device,device.function,(uint8_t)(0x10u+channel*8u));
+            uint32_t c=pci_read32(device.bus,device.device,device.function,(uint8_t)(0x14u+channel*8u));
+            if(!(b&1u)||!(c&1u)||(b&~3u)>0xfff8u||(c&~3u)>0xfffcu)continue;
+            base=(uint16_t)(b&~3u);control=(uint16_t)((c&~3u)+2u);
+        }
+        if(!base || hardware_claim(HW_PIO,base,8,owner))continue;
+        if(hardware_claim(HW_PIO,control,1,owner)) {
+            (void)hardware_release(HW_PIO,base,8,owner);continue;
+        }
+        uint32_t command=pci_read32(device.bus,device.device,device.function,4u);
+        /* Enable I/O decoding, do not enable bus mastering for a PIO provider. */
+        hardware_pci_write32(device.bus,device.device,device.function,4u,((command&0xffffu)&~4u)|1u);
+        for(unsigned slave=0;slave<2;++slave) {
+            ata_pio_t candidate={.io=io,.base=base,.control=control,.slave=(uint8_t)slave};
+            if(!ata_pio_identify(&candidate)){ide_disk=candidate;return 0;}
+        }
+        (void)hardware_release(HW_PIO,control,1,owner);
+        (void)hardware_release(HW_PIO,base,8,owner);
+    }
+    hardware_pci_write32(device.bus,device.device,device.function,4u,original_command&0xffffu);
+    (void)hardware_release(HW_PCI,((uint64_t)device.bus<<8u)|(device.device<<3u)|device.function,1u,UINT64_MAX);
+    return -1;
+}
 static int disk_rw(uint64_t lba, uint32_t count, void *buffer, int write) {
+    kernel_guard_t guard __attribute__((cleanup(kernel_guard_leave)))=kernel_guard_enter_irq_safe(&disk_data_gate);
     if (buffer == NULL || count == 0 || disk_backend == DISK_NONE) {
         return -1;
+    }
+    if(lba>=disk_size() || (uint64_t)count>disk_size()-lba)return -1;
+    if(disk_backend==DISK_IDE) {
+        kernel_guard_t channel __attribute__((cleanup(kernel_guard_leave)))=kernel_guard_enter_irq_safe(&ata_channel_gate);
+        return ata_pio_transfer(&ide_disk,lba,count,buffer,write);
     }
 
     uint8_t *bytes = buffer;
@@ -785,12 +916,31 @@ void disk_init(void) {
     }
 
     /* Fallback: ATA PIO ATAPI on classic IDE (VirtualBox default for CD-ROM) */
+    if(disk_backend==DISK_NONE && pci_find_storage(0x01u,&device)==0 && ide_init(device)==0)
+        disk_backend=DISK_IDE;
     if (!atapi_ahci_ready) {
         ata_pio_probe_atapi();
+    }
+
+    if (disk_backend != DISK_NONE) {
+        debug_log_puts(disk_backend == DISK_NVME ? "disk: NVMe" : disk_backend==DISK_IDE ? "disk: ATA IDE" : "disk: AHCI SATA");
+        debug_log_puts(" sectors=");
+        disk_log_hex(disk_size());
+        debug_log_puts("\n");
+    } else {
+        debug_log_puts("disk: no hard disk\n");
+    }
+    if (atapi_ahci_ready) {
+        debug_log_puts("disk: cdrom AHCI ATAPI ready\n");
+    } else if (atapi_pio_ready) {
+        debug_log_puts("disk: cdrom ATA PIO ready\n");
+    } else {
+        debug_log_puts("disk: no cdrom backend\n");
     }
 }
 
 const char *disk_type(void) {
+    if(disk_backend==DISK_IDE)return "ATA IDE";
     if (disk_backend == DISK_NVME) {
         return "NVMe";
     }
@@ -799,7 +949,7 @@ const char *disk_type(void) {
         return "AHCI";
     }
 
-    return "aucun";
+    return "none";
 }
 
 int disk_read(uint64_t lba, uint32_t count, void *buffer) {
@@ -811,6 +961,7 @@ int disk_write(uint64_t lba, uint32_t count, void *buffer) {
 }
 
 uint64_t disk_size(void) {
+    if(disk_backend==DISK_IDE)return ide_disk.sectors;
     if (disk_backend == DISK_NVME) {
         return nvme.sectors;
     }
@@ -820,6 +971,25 @@ uint64_t disk_size(void) {
     }
 
     return 0;
+}
+int disk_flush(void) {
+    KERNEL_GUARD(disk_data_gate);
+    if(disk_backend==DISK_NONE)return -1;
+    if(disk_backend==DISK_IDE){KERNEL_GUARD(ata_channel_gate);return ata_pio_flush(&ide_disk);}
+    if(disk_backend==DISK_NVME) {
+        nvme_command_t command={.opcode=0,.nsid=1};return nvme_submit_io(&command);
+    }
+    if(disk_backend==DISK_AHCI) {
+        int slot=ahci_find_cmd_slot(ahci.port);if(slot<0)return -1;
+        ahci_cmd_header_t *h=&ahci.cmd_list[slot];ahci_cmd_table_t *t=&ahci.cmd_table[slot];
+        memset(t,0,sizeof(*t));h->cfl=5;h->a=0;h->prdtl=0;
+        t->cfis[0]=AHCI_FIS_TYPE_REG_H2D;t->cfis[1]=0x80;t->cfis[2]=0xea;
+        ahci.port->is=UINT32_MAX;__asm__ volatile("mfence":::"memory");ahci.port->ci=1u<<slot;
+        uint64_t start=sched_clock_ns();
+        while(ahci.port->ci&(1u<<slot))if(sched_clock_ns()-start>=2000000000ull)return -1;
+        return ahci.port->is&0x40000000u?-1:0;
+    }
+    return -1;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -1016,6 +1186,8 @@ int disk_cdrom_available(void) {
 }
 
 int disk_cdrom_read(uint32_t lba, uint32_t count, void *buffer) {
+    kernel_guard_t channel __attribute__((cleanup(kernel_guard_leave)))=kernel_guard_enter_irq_safe(&ata_channel_gate);
+    kernel_guard_t guard __attribute__((cleanup(kernel_guard_leave)))=kernel_guard_enter_irq_safe(&cdrom_io_gate);
     if (!disk_cdrom_available() || !buffer || count == 0) return -1;
     uint8_t *dst = (uint8_t *)buffer;
     uint32_t rem = count;

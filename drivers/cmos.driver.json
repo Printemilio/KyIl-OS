@@ -1,0 +1,554 @@
+{
+  "format": 1,
+  "name": "cmos-calendar",
+  "platform": "rtc.cmos",
+  "bus": "platform",
+  "class": "clock",
+  "priority": 100,
+  "features": [
+    "base",
+    "indexed"
+  ],
+  "resources": [
+    {
+      "kind": "indexed-pio",
+      "length": 16,
+      "rights": [
+        "read"
+      ],
+      "widths": 1
+    }
+  ],
+  "entries": {
+    "probe": [
+      {
+        "op": "read",
+        "dst": 1,
+        "b": 1,
+        "aux": 0,
+        "imm": 13
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 128
+      },
+      {
+        "op": "and",
+        "dst": 1,
+        "a": 1,
+        "b": 30
+      },
+      {
+        "op": "jnz",
+        "a": 1,
+        "target": "valid"
+      },
+      {
+        "op": "ret",
+        "imm": -12
+      },
+      {
+        "label": "valid"
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "init": [
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "stop": [
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "read": [
+      {
+        "label": "again"
+      },
+      {
+        "op": "read",
+        "dst": 1,
+        "b": 1,
+        "aux": 0,
+        "imm": 10
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 128
+      },
+      {
+        "op": "and",
+        "dst": 2,
+        "a": 1,
+        "b": 30
+      },
+      {
+        "op": "jnz",
+        "a": 2,
+        "target": "again"
+      },
+      {
+        "op": "read",
+        "dst": 13,
+        "b": 1,
+        "aux": 0,
+        "imm": 0
+      },
+      {
+        "op": "read",
+        "dst": 12,
+        "b": 1,
+        "aux": 0,
+        "imm": 2
+      },
+      {
+        "op": "read",
+        "dst": 11,
+        "b": 1,
+        "aux": 0,
+        "imm": 4
+      },
+      {
+        "op": "read",
+        "dst": 10,
+        "b": 1,
+        "aux": 0,
+        "imm": 7
+      },
+      {
+        "op": "read",
+        "dst": 9,
+        "b": 1,
+        "aux": 0,
+        "imm": 8
+      },
+      {
+        "op": "read",
+        "dst": 8,
+        "b": 1,
+        "aux": 0,
+        "imm": 9
+      },
+      {
+        "op": "read",
+        "dst": 1,
+        "b": 1,
+        "aux": 0,
+        "imm": 11
+      },
+      {
+        "op": "read",
+        "dst": 2,
+        "b": 1,
+        "aux": 0,
+        "imm": 10
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 128
+      },
+      {
+        "op": "and",
+        "dst": 2,
+        "a": 2,
+        "b": 30
+      },
+      {
+        "op": "jnz",
+        "a": 2,
+        "target": "again"
+      },
+      {
+        "op": "read",
+        "dst": 3,
+        "b": 1,
+        "aux": 0,
+        "imm": 0
+      },
+      {
+        "op": "eq",
+        "dst": 2,
+        "a": 3,
+        "b": 13
+      },
+      {
+        "op": "jz",
+        "a": 2,
+        "target": "again"
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 4
+      },
+      {
+        "op": "and",
+        "dst": 2,
+        "a": 1,
+        "b": 30
+      },
+      {
+        "op": "jnz",
+        "a": 2,
+        "target": "binary"
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 16
+      },
+      {
+        "op": "div",
+        "dst": 17,
+        "a": 13,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 10
+      },
+      {
+        "op": "mul",
+        "dst": 17,
+        "a": 17,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 16
+      },
+      {
+        "op": "mod",
+        "dst": 13,
+        "a": 13,
+        "b": 30
+      },
+      {
+        "op": "add",
+        "dst": 13,
+        "a": 13,
+        "b": 17
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 16
+      },
+      {
+        "op": "div",
+        "dst": 17,
+        "a": 12,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 10
+      },
+      {
+        "op": "mul",
+        "dst": 17,
+        "a": 17,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 16
+      },
+      {
+        "op": "mod",
+        "dst": 12,
+        "a": 12,
+        "b": 30
+      },
+      {
+        "op": "add",
+        "dst": 12,
+        "a": 12,
+        "b": 17
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 16
+      },
+      {
+        "op": "div",
+        "dst": 17,
+        "a": 10,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 10
+      },
+      {
+        "op": "mul",
+        "dst": 17,
+        "a": 17,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 16
+      },
+      {
+        "op": "mod",
+        "dst": 10,
+        "a": 10,
+        "b": 30
+      },
+      {
+        "op": "add",
+        "dst": 10,
+        "a": 10,
+        "b": 17
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 16
+      },
+      {
+        "op": "div",
+        "dst": 17,
+        "a": 9,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 10
+      },
+      {
+        "op": "mul",
+        "dst": 17,
+        "a": 17,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 16
+      },
+      {
+        "op": "mod",
+        "dst": 9,
+        "a": 9,
+        "b": 30
+      },
+      {
+        "op": "add",
+        "dst": 9,
+        "a": 9,
+        "b": 17
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 16
+      },
+      {
+        "op": "div",
+        "dst": 17,
+        "a": 8,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 10
+      },
+      {
+        "op": "mul",
+        "dst": 17,
+        "a": 17,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 16
+      },
+      {
+        "op": "mod",
+        "dst": 8,
+        "a": 8,
+        "b": 30
+      },
+      {
+        "op": "add",
+        "dst": 8,
+        "a": 8,
+        "b": 17
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 128
+      },
+      {
+        "op": "and",
+        "dst": 18,
+        "a": 11,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 127
+      },
+      {
+        "op": "and",
+        "dst": 11,
+        "a": 11,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 16
+      },
+      {
+        "op": "div",
+        "dst": 17,
+        "a": 11,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 10
+      },
+      {
+        "op": "mul",
+        "dst": 17,
+        "a": 17,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 16
+      },
+      {
+        "op": "mod",
+        "dst": 11,
+        "a": 11,
+        "b": 30
+      },
+      {
+        "op": "add",
+        "dst": 11,
+        "a": 11,
+        "b": 17
+      },
+      {
+        "op": "or",
+        "dst": 11,
+        "a": 11,
+        "b": 18
+      },
+      {
+        "label": "binary"
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2000
+      },
+      {
+        "op": "add",
+        "dst": 8,
+        "a": 8,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 128
+      },
+      {
+        "op": "and",
+        "dst": 18,
+        "a": 11,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 127
+      },
+      {
+        "op": "and",
+        "dst": 11,
+        "a": 11,
+        "b": 30
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 2
+      },
+      {
+        "op": "and",
+        "dst": 2,
+        "a": 1,
+        "b": 30
+      },
+      {
+        "op": "jnz",
+        "a": 2,
+        "target": "done"
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 12
+      },
+      {
+        "op": "mod",
+        "dst": 11,
+        "a": 11,
+        "b": 30
+      },
+      {
+        "op": "jz",
+        "a": 18,
+        "target": "done"
+      },
+      {
+        "op": "add",
+        "dst": 11,
+        "a": 11,
+        "b": 30
+      },
+      {
+        "label": "done"
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ]
+  },
+  "info": {
+    "hardware": "MC146818/DS12887 compatible calendar; firmware-configured, read only",
+    "source": "https://www.analog.com/media/en/technical-documentation/data-sheets/DS12885-DS12C887A.pdf",
+    "protocol": "UIP/seconds coherence; BCD or binary, 12h AM/PM or 24h; years 2000..2099"
+  }
+}

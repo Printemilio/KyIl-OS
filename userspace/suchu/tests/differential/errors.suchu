@@ -1,0 +1,29 @@
+// A program that ends badly. Whether it is interpreted or compiled, the same
+// sentence has to reach standard error and the same status has to come back --
+// otherwise a compiled program reports its own mistake as though the runtime
+// had broken.
+//
+// Everything before the failure still has to have happened, and been flushed.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun main() {
+  show("this runs = ", 1 + 1);
+
+  // Errors that a try does catch, so the message text is checked here too.
+  try { n = 1 % 0; } else e { show("modulo by zero: ", e.message); }
+  try { n = [][0]; } else e { show("index out of range: ", e.message); }
+  try { n = "a" - 1; } else e { show("bad operand: ", e.message); }
+  try { n = missing_name(); } else e { show("unknown name: ", e.message); }
+  try { n = { a: 1; }.b; } else e { show("missing field: ", e.message); }
+  try { n = @[]; } else e { show("pull from empty: ", e.message); }
+  try { assert(false); } else e { show("assertion: ", e.message); }
+
+  print("about to fail");
+  n = 1 % 0;
+  print("this must not print");
+}
+
+main();

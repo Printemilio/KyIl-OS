@@ -1,0 +1,82 @@
+Windows/PE continuation checkpoint — 2026-10-11
+
+Final ISO: build/kyilos-windows-tls.iso
+ISO SHA256: C0D0361E87CC499A7B312B5819438D5B2A9C35F1BD63F97E1C8244880EA7855F
+Kernel SHA256: 96209CB3806F1959309372BFFE078C17839379C5993A7B374C5491327138E33D
+Runtime SHA256: F823951169415B1D8538351FB1D5B082299E61A34A1DD30A9F6B6794617F7357
+Runtime file matches portable ISO staging. The same final ISO ran both CPU configurations.
+Dedicated VM: KyIlOS-Legacy-Test, BIOS, 4096 MiB, disposable VexFS disk.
+Main user VM and existing Dell/Suchu ISO/USB images were not replaced.
+
+HOST
+- PE parser: 21 checks PASS.
+- NLS: 80,000 comparisons against actual Windows CompareStringW PASS.
+  Only invariant/en-US alphanumeric basic-Latin weights are supported.
+- SysV-to-Windows CFG bridge adversary: before exit=1; after exit=0.
+  Tests target/argument registers, RDI/RSI and XMM0-15, with a SysV validator
+  deliberately overwriting all SIMD registers. Current-source host suite PASS.
+  Reproducer: tests/windows_guard_abi_test.S.
+- Reproducible host script: scripts/test-windows-runtime-host.ps1.
+
+GUEST — BOTH 1 AND 4 vCPU
+- Three actual PE/DLL cycles, native raw wait statuses and four refusal paths PASS.
+- Eight PE threads, EXE + two DLL TLS, GS/TEB/PEB, suspended start/resume,
+  guard stack growth, callback order and same-thread loader re-entry PASS.
+- SRW shared/exclusive with 16,000 increments PASS.
+- Native GS test: four independent contexts, fork inheritance, exec reset,
+  invalid high GS and readonly context request rejection PASS.
+- Real CFG allowed indirect call / six arguments / random cookie PASS.
+  Invalid target terminates only guest with 0xc0000409.
+- Real AV -> Windows VEH -> modified CONTEXT -> resume -> stale removal PASS.
+- Prefix paths/real mkdir/short buffer/traversal + A: write refusal PASS.
+- Unnamed manual/auto events, 100 signal/registration races, stale handles PASS.
+- Native SHM section/RO-RW views, 64 KiB alignment/offset, rights narrowing,
+  handle close before unmap, last-view cleanup and executable refusal PASS.
+- Three eight-thread ExitProcess races return actual status 17 with DLL detach PASS.
+- Native libc pthread suite: 187 checks, 0 failed.
+- Native console: ten pointer/rights/delegation checks PASS.
+- Linux thread TLS/FPU, genuine RW->RX/W^X refusal, synchronous faults,
+  private/shared ownership and fork/parent-child teardown PASS.
+- No kernel panic or runner FAIL in either final log.
+- 1 CPU PE test mask=0x1, migrations=0; 4 CPU mask=0xf, migrations=0x66 (102).
+
+Raw execution evidence:
+ build/windows/windows-final-1cpu.log
+ build/windows/windows-latest-4cpu.log
+ build/windows/host-tests-final.log
+
+FAILURE FOUND AND CORRECTED (not suppressed):
+ build/windows/exit-race-bad-status-4cpu.log
+ ExitProcess from a worker stopped the original main thread with status 0;
+ native wait correctly waited for group quiescence but returned leader status 0.
+ Windows adapter now passes the winning process exit code to peer stops.
+ Concurrent losing ExitProcess callers no longer terminate the group during detach.
+
+SUCHU
+- Terminal opening, rendering and input used for all guest tests.
+- Editor opened after 4 CPU suite; actual text typed and visually checked:
+  "Native GS regression OK". Closed using Discard; no user's file saved/modified.
+- Screenshots: build/windows/suchu-editor-typed-final.png,
+  build/windows/suchu-editor-close-final.png.
+- This is not an exhaustive Suchu/browser/graphics regression campaign.
+
+ACTUAL CHROME
+Unmodified installed Windows Chrome 155.0.8059.39, EXE + chrome_elf.dll.
+TLS/CFG/load-config/delay metadata accepted; static imports advance past earlier
+CompareStringW and CreateFileMappingW frontiers.
+Final actual guest trace:
+ windows: userspace direct PE loader / native ABI
+ windows: missing import KERNEL32.dll!CreateFileW
+ windows: load failed: Windows API not implemented
+No Chrome EXE entry, window or navigation is claimed. chrome.dll is not staged yet.
+
+ARCHITECTURAL CHOICE PENDING
+C: per-user Windows prefix is approved and its real directories are implemented.
+OPEN_EX follows symbolic links; dirfd stores a path rather than a stable confined
+root object. Before general Windows file access, clarify namespace-view-only
+(native UID/capability security) versus actual generic filesystem root-capability
+confinement, including concurrent symlinks/rename. Do not silently claim confinement.
+Registry, known folders, general files/IO completion and dynamic DLL load/unload
+remain unsupported. Native Win32 is not moved into the kernel.
+No physical Dell test. Timer/CPU-old-hardware/ORA/FlowSched/graphics code unchanged
+except the required generic GS/thread/identity primitives described in the docs.

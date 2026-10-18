@@ -5,6 +5,7 @@
 #include <unos/boot_requests.h>
 #include <unos/tty.h>
 #include <unos/vmm.h>
+#include <unos/kernel_virtual_layout.h>
 
 #define PCI_CONFIG_ADDRESS 0xcf8u
 #define PCI_CONFIG_DATA 0xcfcu
@@ -12,7 +13,7 @@
 #define PCI_CLASS_MULTIMEDIA 0x04u
 #define PCI_SUBCLASS_HDA 0x03u
 #define PAGE_SIZE 4096ull
-#define VOICE_MMIO_BASE 0xffffffffc0000000ull
+#define VOICE_MMIO_BASE VEX_KERNEL_AUDIO_MMIO_BASE
 
 #define HDA_GCAP 0x00u
 #define HDA_VMIN 0x02u
@@ -87,7 +88,9 @@ static void *map_mmio(uint64_t phys, uint64_t length) {
     const uint64_t mapped_length = align_up(length + phys_offset, PAGE_SIZE);
     const uint64_t virt_base = next_mmio_virt;
 
-    if (phys == 0 || hhdm_request.response == NULL) {
+    if (phys == 0 || hhdm_request.response == NULL ||
+        length > UINT64_MAX - phys_offset || mapped_length < length ||
+        mapped_length > VEX_KERNEL_AUDIO_MMIO_LIMIT - virt_base) {
         return NULL;
     }
 
@@ -241,10 +244,10 @@ static int text_contains(const char *text, const char *needle) {
 }
 
 voice_command_t voice_command_from_text(const char *text) {
-    if (text_contains(text, "terminal") || text_contains(text, "ouvre le terminal")) {
+    if (text_contains(text, "terminal") || text_contains(text, "open terminal")) {
         return VOICE_COMMAND_OPEN_TERMINAL;
     }
-    if (text_contains(text, "browser") || text_contains(text, "navigateur") || text_contains(text, "webkit")) {
+    if (text_contains(text, "browser") || text_contains(text, "webkit")) {
         return VOICE_COMMAND_OPEN_BROWSER;
     }
     return VOICE_COMMAND_NONE;
@@ -252,7 +255,7 @@ voice_command_t voice_command_from_text(const char *text) {
 
 int voice_listen_once(char *out_text, size_t capacity) {
     if (!hda.available) {
-        copy_string(out_text, capacity, "voice hda indisponible");
+        copy_string(out_text, capacity, "voice hda unavailable");
         return 0;
     }
 
@@ -261,6 +264,6 @@ int voice_listen_once(char *out_text, size_t capacity) {
      * stream DMA + Pocketsphinx can replace this recognizer boundary without
      * changing Spotlight.
      */
-    copy_string(out_text, capacity, "ecoute activee");
+    copy_string(out_text, capacity, "listening enabled");
     return 0;
 }

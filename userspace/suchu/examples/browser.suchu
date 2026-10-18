@@ -1,0 +1,327 @@
+// Native KyIlOS browser. Suchu owns tabs, navigation, chrome and input routing.
+// WebKit owns only each web viewport. No HTML browser UI or snapshot transport.
+import browser;
+import draw;
+import keys;
+import mouse;
+import chrome;
+
+tabs = [[1, "New Page", "", 0, "", false, false, -1, -1]];
+selected = 0;
+next_id = 2;
+started = false;
+web_focus = false;
+window_focus = true;
+entered = false;
+buttons = 0;
+commands = [];
+inputs = [];
+downloads_open = false;
+downloads = [];
+notice = "";
+failed = false;
+submit_requested = false;
+
+fun enqueue(op, id, uri) { push(commands, [op, id, uri]); }
+fun emit(kind, x, y, value, key, hardware, mods, pressed) {
+  push(inputs, [tabs[selected][0], [kind, browser.time(), mods, pressed,
+    round(x), round(y), value, key, hardware, 0, 0]]);
+}
+fun focus_web(wanted) {
+  if web_focus != wanted {
+    web_focus = wanted;
+    if wanted { blur(); }
+    emit(6, 0, 0, 0, 0, 0, 0, if wanted then 1 else 0);
+  }
+}
+fun select_tab(index) {
+  if index < 0 || index >= len(tabs) { return; }
+  focus_web(false);
+  tabs[selected][2] = get_text(if tabs[selected][5] then address else home_search);
+  blur();
+  // Hide the old page using the existing WPE configure/activity contract.
+  push(inputs, [tabs[selected][0], [1, browser.time(), 0, 0, 0, 0, 0, 0, 0, 0, 0]]);
+  selected = index;
+  entered = false;
+  tabs[selected][7] = -1;
+  set_text(address, tabs[selected][2]);
+  set_text(home_search, tabs[selected][2]);
+  enqueue(2, tabs[selected][0], "");
+}
+fun new_tab() {
+  if len(tabs) >= 8 { notice = "Eight pages maximum"; return; }
+  push(tabs, [next_id, "New Page", "", 0, "", false, false, -1, -1]);
+  enqueue(1, next_id, "");
+  next_id = next_id + 1;
+  select_tab(len(tabs) - 1);
+  focus(home_search);
+}
+fun close_tab(index) {
+  if index < 0 || index >= len(tabs) { return; }
+  if len(tabs) == 1 { chrome.close(); return; }
+  old = tabs[index][0];
+  if index == selected { focus_web(false); }
+  enqueue(3, old, "");
+  retained = [];
+  for job in inputs { if job[0] != old { push(retained, job); } }
+  inputs = retained;
+  remove(tabs, index);
+  if index < selected { selected = selected - 1; }
+  if selected >= len(tabs) { selected = len(tabs) - 1; }
+  entered = false;
+  tabs[selected][7] = -1;
+  set_text(address, tabs[selected][2]);
+  set_text(home_search, tabs[selected][2]);
+  enqueue(2, tabs[selected][0], "");
+}
+fun navigate() {
+  text = get_text(if is_focused(home_search) then home_search else address).trim();
+  try {
+    uri = browser.normalize(text);
+    enqueue(4, tabs[selected][0], uri);
+    tabs[selected][2] = uri;
+    tabs[selected][5] = true;
+    tabs[selected][4] = "";
+    set_text(address, uri);
+    focus_web(true);
+    notice = "";
+  } else error { notice = "Invalid or oversized address"; }
+}
+fun navigate_home() { set_text(address, get_text(home_search)); navigate(); }
+fun configure() {
+  bounds = get_bounds(content);
+  width = if tabs[selected][5] && !downloads_open then max(1, round(bounds[2])) else 0;
+  height = if width > 0 then max(1, round(bounds[3])) else 0;
+  page = tabs[selected];
+  if page[6] && (page[7] != width || page[8] != height) {
+    push(inputs, [page[0], [1, browser.time(), 0, 0, 0, 0, 0, 0, 0, width, height]]);
+    page[7] = width; page[8] = height;
+  }
+}
+fun pump() {
+  if failed { return; }
+  if !started { browser.open(); started = true; }
+  reports = browser.poll();
+  for report in reports {
+    i = 0;
+    while i < len(tabs) {
+      if tabs[i][0] == report[1] {
+        if report[0] == 9 { tabs[i][6] = true; tabs[i][7] = -1; }
+        if report[0] == 10 {
+          tabs[i][3] = report[2]; tabs[i][4] = report[5];
+          if report[4] != "" { tabs[i][1] = report[4]; }
+          if report[3] != "" {
+            tabs[i][2] = report[3]; tabs[i][5] = true;
+            if i == selected && !is_focused(address) { set_text(address, report[3]); }
+          }
+        }
+      }
+      i = i + 1;
+    }
+  }
+  set_visible(home, !tabs[selected][5] && !downloads_open);
+  set_visible(content, tabs[selected][5] || downloads_open);
+  set_visible(toolbar, tabs[selected][5] || downloads_open);
+  route_events();
+  configure();
+  sending = true;
+  while sending && len(commands) > 0 {
+    job = commands[0];
+    result = browser.command(job[0], job[1], job[2]);
+    if result == 0 { remove(commands, 0); }
+    else if result == -11 { sending = false; }
+    else { notice = "WebKit command channel failed: " @ result; sending = false; }
+  }
+  sending = true;
+  while sending && len(inputs) > 0 {
+    job = inputs[0];
+    result = browser.input(job[0], job[1]);
+    if result == 0 { remove(inputs, 0); }
+    else if result == -11 { sending = false; }
+    else { notice = "WebKit input channel failed: " @ result; sending = false; }
+  }
+  downloads = browser.downloads();
+  set_enabled(back, round(floor(tabs[selected][3] / 2)) % 2 == 1);
+  set_enabled(forward, round(floor(tabs[selected][3] / 4)) % 2 == 1);
+}
+fun draw_reload() {
+  draw.clear(2105380);
+  if tabs[selected][3] % 2 == 1 {
+    draw.line(11, 9, 21, 19, 1.5, 15658734);
+    draw.line(21, 9, 11, 19, 1.5, 15658734);
+  } else {
+    angle = 0.5;
+    while angle < 5.8 {
+      next = min(5.8, angle + 0.35);
+      draw.line(16 + cos(angle) * 7, 14 + sin(angle) * 7,
+        16 + cos(next) * 7, 14 + sin(next) * 7, 1.5, 15658734);
+      angle = next;
+    }
+    draw.line(22, 11, 23, 5, 1.5, 15658734);
+    draw.line(22, 11, 16, 10, 1.5, 15658734);
+  }
+  b = get_bounds(reload);
+  if mouse.pressed() && mouse.x() >= b[0] && mouse.y() >= b[1] &&
+    mouse.x() < b[0] + b[2] && mouse.y() < b[1] + b[3] {
+    enqueue(if tabs[selected][3] % 2 == 1 then 8 else 7, tabs[selected][0], "");
+  }
+}
+fun route_events() {
+  bounds = get_bounds(content);
+  for event in browser.events() {
+    kind = event[0]; flags = event[1];
+    mods = round(floor(flags / 256)) % 256;
+    if kind == 7 {
+      window_focus = flags == 1;
+      if !window_focus { focus_web(false); }
+    }
+    if kind == 6 {
+      pressed = flags % 2 == 1;
+      ctrl = mods % 2 == 1;
+      shift = round(floor(mods / 2)) % 2 == 1;
+      alt = round(floor(mods / 4)) % 2 == 1;
+      key = event[2]; hardware = event[3];
+      consumed = false;
+      if pressed && ctrl {
+        if key == 108 || key == 76 { focus_web(false); focus(if tabs[selected][5] then address else home_search); consumed = true; }
+        if key == 116 || key == 84 { new_tab(); consumed = true; }
+        if key == 119 || key == 87 { close_tab(selected); consumed = true; }
+        if key == 114 || key == 82 { enqueue(7, tabs[selected][0], ""); consumed = true; }
+        if hardware == 15 { select_tab((selected + (if shift then len(tabs) - 1 else 1)) % len(tabs)); consumed = true; }
+      }
+      if pressed && alt && hardware == 203 { enqueue(5, tabs[selected][0], ""); consumed = true; }
+      if pressed && alt && hardware == 205 { enqueue(6, tabs[selected][0], ""); consumed = true; }
+      if pressed && hardware == 63 { enqueue(7, tabs[selected][0], ""); consumed = true; }
+      if pressed && key == 10 && (is_focused(address) || is_focused(home_search)) { submit_requested = true; consumed = true; }
+      if !consumed && web_focus && window_focus {
+        emit(5, 0, 0, 0, key, hardware, mods, if pressed then 1 else 0);
+      }
+    }
+    if kind == 5 {
+      x = event[2] - bounds[0]; y = event[3] - bounds[1];
+      now_buttons = flags % 8;
+      inside = x >= 0 && y >= 0 && x < bounds[2] && y < bounds[3];
+      down = now_buttons % 2 == 1 && buttons % 2 == 0;
+      if down && !inside { focus_web(false); }
+      if down && inside {
+        if downloads_open {
+          row = round(floor((y - 48) / 66));
+          if row >= 0 && row < len(downloads) {
+            if downloads[row][2] == 1 { enqueue(15, downloads[row][0], ""); }
+            else if downloads[row][2] == 2 {
+              set_text(address, "file://" @ downloads[row][6]); downloads_open = false; navigate();
+            }
+          }
+        } else if tabs[selected][5] { focus_web(true); }
+      }
+      if tabs[selected][5] && !downloads_open {
+        if inside && !entered { emit(7, x, y, 0, 0, now_buttons, mods, 0); entered = true; }
+        if !inside && entered { emit(8, x, y, 0, 0, now_buttons, mods, 0); entered = false; }
+        if inside || web_focus && buttons != 0 {
+          emit(2, x, y, 0, 0, now_buttons, mods, 0);
+          bit = 1; button = 1;
+          while button <= 3 {
+            was = round(floor(buttons / bit)) % 2; is = round(floor(now_buttons / bit)) % 2;
+            if was != is { emit(3, x, y, button, 0, now_buttons, mods, is); }
+            bit = bit * 2; button = button + 1;
+          }
+          if event[4] != 0 { emit(4, x, y, event[4], 0, now_buttons, mods, 0); }
+        }
+      }
+      buttons = now_buttons;
+    }
+  }
+}
+fun draw_tabs() {
+  // Generic Input editing runs between Timer dispatch and render. Submit
+  // after it, so Enter includes the last characters in the same event batch.
+  if submit_requested { submit_requested = false; navigate(); }
+  width = draw.width();
+  count = len(tabs);
+  clicked_tab = false;
+  // RAW pointer positions may lie in the native title bar (negative client
+  // y). A window control/drag must never hit a tab or the new-page button.
+  strip_click = mouse.pressed() && mouse.y() >= 0 && mouse.y() < 36 &&
+    mouse.x() >= 0 && mouse.x() < width;
+  tab_width = min(190, max(72, round(floor((width - 40) / len(tabs)))));
+  i = 0;
+  while i < len(tabs) {
+    x = i * tab_width;
+    draw.rect(x, 0, tab_width - 2, 34, if i == selected then 2105380 else 1184276);
+    draw.line(x, 34, x + tab_width - 2, 34, 1, 4927836);
+    draw.text(x + 12, 9, browser.prefix(tabs[i][1], max(4, round(floor((tab_width - 48) / 8)))), 14, 15658734);
+    draw.text(x + tab_width - 24, 9, "×", 14, 10066329);
+    if strip_click && mouse.x() >= x && mouse.x() < x + tab_width {
+      clicked_tab = true;
+      if mouse.x() >= x + tab_width - 30 { close_tab(i); }
+      else { select_tab(i); }
+    }
+    i = i + 1;
+  }
+  draw.text(len(tabs) * tab_width + 12, 7, "+", 18, 15658734);
+  if !clicked_tab && strip_click && mouse.x() >= count * tab_width { new_tab(); }
+}
+fun draw_content() {
+  w = round(draw.width()); h = round(draw.height());
+  b = get_bounds(content);
+  if downloads_open {
+    draw.clear(1184276);
+    draw.text(24, 18, "Downloads", 24, 15658734);
+    i = 0;
+    while i < len(downloads) {
+      d = downloads[i]; y = 50 + i * 66;
+      draw.text(24, y, d[5], 16, 15658734);
+      label = if d[2] == 1 then "Receiving — click to cancel" else if d[2] == 2 then "Saved — click to open" else if d[2] == 4 then "Cancelled" else d[7];
+      draw.text(24, y + 22, label @ "   " @ d[3] @ " / " @ d[4] @ " bytes", 12, 11182266);
+      i = i + 1;
+    }
+  } else {
+    frame = browser.draw(tabs[selected][0], [round(b[0]), round(b[1]), w, h]);
+    if !frame { draw.text(24, 24, "Waiting for WebKit content…", 16, 11182266); }
+    if tabs[selected][4] != "" { draw.rect(12, 12, w - 24, 58, 3416106); draw.text(24, 30, tabs[selected][4], 14, 16761024); }
+  }
+  if notice != "" { draw.text(12, h - 24, notice, 13, 16755370); }
+}
+
+Window("KyIl Browser", 1100px, 760px) {
+  background: #121214;
+  layout: column;
+  padding: 0px;
+  spacing: 0px;
+  exit-key: "none";
+  Canvas { id: "tabstrip"; width: fill; height: 36px; onDraw: { draw_tabs(); }; }
+  Row {
+    id: "toolbar";
+    width: fill; height: 42px; padding: 6px; spacing: 6px; align: center;
+    background: #121214; color: #eeeeee; font-size: 16px;
+    Button { id: "back"; text: "‹"; width: 32px; height: 28px; background: #202024; onClick: { focus_web(false); enqueue(5, tabs[selected][0], ""); }; }
+    Button { id: "forward"; text: "›"; width: 32px; height: 28px; background: #202024; onClick: { focus_web(false); enqueue(6, tabs[selected][0], ""); }; }
+    Canvas { id: "reload"; width: 32px; height: 28px; onDraw: { draw_reload(); }; }
+    Input { id: "address"; width: fill; height: 28px; padding: 6px; border-radius: 4px; background: #202024; color: #eeeeee; font-size: 14px; placeholder: "Search or enter address"; }
+    Button { text: "Go"; width: 40px; height: 28px; background: #39244d; onClick: { navigate(); }; }
+    Button { text: "↓"; width: 32px; height: 28px; background: #202024; onClick: { focus_web(false); downloads_open = !downloads_open; }; }
+  }
+  Column {
+    id: "home"; width: fill; height: fill; align: center; spacing: 20px;
+    Spacer { height: fill; }
+    Label { text: "KyIl Browser"; color: #aa88ff; font-size: 42px; }
+    Row {
+      width: 60%; height: 40px; spacing: 8px;
+      Input { id: "home_search"; width: fill; height: 38px; padding: 10px; border-radius: 4px; background: #202024; color: #eeeeee; font-size: 14px; placeholder: "Search what you want …"; }
+      Button { text: "Go"; width: 44px; height: 38px; background: #39244d; color: #eeeeee; onClick: { navigate_home(); }; }
+    }
+    Spacer { height: fill; }
+  }
+  Canvas { id: "content"; width: fill; height: fill; background: #121214; onDraw: { draw_content(); }; }
+  Timer {
+    interval: 16ms;
+    onTick: {
+      try { pump(); } else error {
+        notice = "WebKit transport stopped: " @ error.message;
+        failed = true;
+        browser.close();
+        set_enabled(toolbar, false);
+      }
+    };
+  }
+}

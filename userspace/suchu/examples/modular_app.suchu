@@ -1,0 +1,8 @@
+import "modules/math_tools.suchu";
+import json;
+import system;
+
+area = math_tools.circle_area(4);
+print("Platform:", system.os);
+print("Area:", area);
+print("As JSON:", json.encode([area, math_tools.clamp(120, 0, 100)]));

@@ -1,0 +1,56 @@
+// Pourcentages et padding par cote.
+//
+// '%' reste l'operateur modulo partout ailleurs : il n'est lu comme une
+// unite que colle a un nombre, dans une propriete GUI. Preuve juste en
+// dessous, avant meme d'ouvrir la fenetre.
+
+print("50 % 3 vaut " @ 50 % 3);
+print("50%3 vaut " @ 50%3);
+
+Window("Pourcentages", 700px, 420px) {
+  background: #0f172a;
+  layout: column;
+  padding-top: 30px;
+  padding-left: 40px;
+  padding-right: 12px;
+  padding-bottom: 12px;
+  spacing: 14px;
+
+  Label {
+    text: "padding-top 30, padding-left 40, padding-right 12";
+    font-size: 14px;
+    color: #94a3b8;
+  }
+
+  // Trois colonnes qui se partagent la largeur : 50 / 25 / 25.
+  Row {
+    width: fill;
+    height: 40%;
+    spacing: 10px;
+
+    Box { width: 50%; height: fill; background: #3b82f6; border-radius: 8px; }
+    Box { width: 25%; height: fill; background: #22c55e; border-radius: 8px; }
+    Box { width: 25%; height: fill; background: #f59e0b; border-radius: 8px; }
+  }
+
+  // Une demi-largeur, centree.
+  Row {
+    width: fill;
+    align: center;
+
+    Input {
+      placeholder: "width: 50%";
+      width: 50%;
+      height: 38px;
+      font-size: 14px;
+      padding: 10px;
+      border-radius: 8px;
+    }
+  }
+
+  Label {
+    text: "Redimensionne : les proportions tiennent.";
+    font-size: 13px;
+    color: #64748b;
+  }
+}

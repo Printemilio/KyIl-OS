@@ -8,6 +8,8 @@ void spotlight_ui_toggle(void);
 void spotlight_ui_close(void);
 int spotlight_ui_is_open(void);
 void spotlight_ui_tick(void);
+int spotlight_ui_is_animating(void);
+void spotlight_ui_redraw(void);
 void spotlight_ui_handle_key(char key);
 void spotlight_ui_handle_click(uint64_t x, uint64_t y);
 void spotlight_ui_voice_listen(void);

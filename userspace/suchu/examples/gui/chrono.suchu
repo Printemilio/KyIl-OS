@@ -1,0 +1,109 @@
+// Chronometre : le Timer bat tout seul, sans action de l'utilisateur, et
+// continue meme quand la fenetre perd le focus.
+//
+// Au passage, un theme clair et compact ecrit entierement ici : rien de ce
+// qui suit n'est code en dur dans le backend.
+
+tenths = 0;
+secs = 0;
+running = false;
+
+Window("Chronometre", 420px, 320px) {
+  background: #f8fafc;
+  layout: column;
+  padding: 26px;
+  spacing: 18px;
+  align: center;
+
+  Label {
+    id: "display";
+    text: "0,0 s";
+    font-size: 44px;
+    font-weight: bold;
+    color: #0f172a;
+  }
+
+  Row {
+    spacing: 10px;
+
+    Button {
+      text: "Depart";
+      background: #16a34a;
+      hover-background: #22c55e;
+      active-background: #15803d;
+      font-size: 14px;
+      padding: 9px;
+      min-height: 32px;
+      border-radius: 6px;
+      onClick: { running = true; };
+    }
+
+    Button {
+      text: "Arret";
+      background: #dc2626;
+      hover-background: #ef4444;
+      font-size: 14px;
+      padding: 9px;
+      min-height: 32px;
+      border-radius: 6px;
+      onClick: { running = false; };
+    }
+
+    Button {
+      text: "Zero";
+      background: #e2e8f0;
+      hover-background: #cbd5e1;
+      color: #0f172a;
+      font-size: 14px;
+      padding: 9px;
+      min-height: 32px;
+      border-radius: 6px;
+      onClick: {
+        tenths = 0;
+        secs = 0;
+        set_text(display, "0,0 s");
+      };
+    }
+  }
+
+  Checkbox {
+    id: "beep";
+    text: "Case en 15px au lieu de 22";
+    size: 15px;
+    font-size: 13px;
+    color: #334155;
+    background: #ffffff;
+    border-color: #94a3b8;
+    focus-color: #16a34a;
+  }
+
+  Input {
+    id: "note";
+    placeholder: "Champ compact, selection verte";
+    width: 320px;
+    height: 34px;
+    font-size: 13px;
+    padding: 9px;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #0f172a;
+    border-color: #cbd5e1;
+    focus-color: #16a34a;
+    selection-color: #86efac;
+  }
+
+  Timer {
+    interval: 100ms;
+    onTick: {
+      if running {
+        tenths = tenths + 1;
+        if tenths >= 10 {
+          tenths = 0;
+          secs = secs + 1;
+        }
+        // '@' veut une chaine a gauche, d'ou le "" initial.
+        set_text(display, "" @ secs @ "," @ tenths @ " s");
+      }
+    };
+  }
+}

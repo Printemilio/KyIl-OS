@@ -1,0 +1,137 @@
+{
+  "checkpoint": "2026-10-18-startup-shared-events",
+  "source": "build/windows/chrome-inherited-streams-1-cpu-20261018-002846.log",
+  "historical_root_misses": {
+    "absent": 8,
+    "source": "build\\windows\\cwd-loader-fixed-1-cpu-20261017-001606.log",
+    "state": "implemented-and-executed; not the current frontier"
+  },
+  "package_version": "155.0.8059.84",
+  "entry_reached": true,
+  "entry_address": "0x14023cd10",
+  "chrome_gui_validated": false,
+  "root_static_missing": {
+    "chrome.exe": 0,
+    "chrome_elf.dll": 0
+  },
+  "broader_chrome_dll_inventory": {
+    "source": "build/windows/chrome-startup-compiled-graph.json",
+    "static_missing_unique_contracts": 242,
+    "delayed_missing_unique_contracts": 766,
+    "nodes": 12,
+    "edges": 2902,
+    "parse_errors": 0,
+    "caveat": "Includes chrome.dll, whose entry is not reached. Counts are unique contracts, not import edges, and are sensitive to the explicit inventory search/census scope. Bindings remain partial contracts, not Windows conformance."
+  },
+  "current_frontier": {
+    "component": "Chrome parent USER32 and actual Crashpad child database initialization",
+    "create_process": "succeeds; second actual chrome.exe entry observed in 1 and 4 vCPU",
+    "observed_failures": [
+      {
+        "operation": "delayed load USER32.dll!FindWindowExW",
+        "library_error": 126,
+        "caller": "0x14023c1c5",
+        "state": "USER32 provider absent; not replaced by an empty lookup stub"
+      },
+      {
+        "operation": "Crashpad CreateDirectoryW",
+        "path": "C:\\Users\\root\\Temp\\Google\\Chrome\\User Data\\Crashpad",
+        "last_error": 3,
+        "state": "parent directory missing; no recursive mkdir or Chrome-specific precreation added"
+      },
+      {
+        "operation": "TransactNamedPipe",
+        "last_error": 109,
+        "state": "peer exits after database initialization failure; not evidence that capability transfer/spawn failed"
+      }
+    ],
+    "causal_boundary": "protected pipe, real shared inherited events and CreateProcess progress into actual child PE entry; child cannot initialize database; parent delayed USER32 call is independently unsupported",
+    "remaining_instrumentation": "Determine requested profile-folder/environment contract and directory-creation sequence; implement a real generic userspace USER32 window contract rather than claiming no window exists."
+  },
+  "validated": {
+    "host_reference": "build/windows/chrome-startup-events-host-unsandboxed.log",
+    "host_protected_pipe": "build/windows/ultra-protected-host.log",
+    "vm1": {
+      "source": "build/windows/chrome-inherited-streams-1-cpu-20261018-002846.log",
+      "complete_runner": true,
+      "census": true,
+      "protected_pipe": true,
+      "ultra_space": true,
+      "shared_event": true,
+      "startup_contract": true,
+      "handle_value_retirement": true,
+      "chrome_pipe_success": true,
+      "actual_child_chrome_entry": true,
+      "chrome_gui": false
+    },
+    "vm4": {
+      "source": "build/windows/chrome-inherited-streams-4-cpu-20261018-002041.log",
+      "complete_runner": true,
+      "census": true,
+      "protected_pipe": true,
+      "ultra_space": true,
+      "shared_event": true,
+      "startup_contract": true,
+      "handle_value_retirement": true,
+      "chrome_pipe_success": true,
+      "actual_child_chrome_entry": true,
+      "chrome_gui": false
+    },
+    "benchmarks": "build/windows/ultra-final-bench.json",
+    "limits": "No Chrome GUI, USER32/GDI, physical Dell rerun, full graphics regression campaign, remote-process VM access, exhaustive event-service OOM injection or Windows conformance.",
+    "host_parser_comparisons": 60000,
+    "pe_graph_tests": 6,
+    "vm4_harness_incident": "Core inspection temporarily interrupted keyboard delivery after completed runner/census; command was retried manually from a clean prompt. Raw log retains the failed partial command. The harness now fails immediately on keyboard delivery errors."
+  },
+  "iso": {
+    "path": "build/kyilos-windows-process.iso",
+    "sha256": "40CA8EE3387DDD3F27F36B786D190C0FA8BCDCB7C9FD02954AD2A524733AC893",
+    "kernel_sha256": "DEAEF6EC86C16580D2BB020D6CF980BDE34F52D94A2CB7EF1743742D90FB75F8",
+    "event_service_sha256": "DA2AF6DBC252E277595F810BACE146ABE588C3EB1EFC47D4593C14D800CB6359",
+    "receipt": "build/windows/chrome-inherited-streams-iso.log"
+  },
+  "previous_frontier": {
+    "component": "chrome_elf / Crashpad",
+    "operation": "CreateNamedPipeW",
+    "return": "INVALID_HANDLE_VALUE",
+    "last_error": 50,
+    "access": "0x80003",
+    "mode": "0x6",
+    "instances": 2,
+    "output_buffer": 512,
+    "input_buffer": 512,
+    "timeout": 0,
+    "security_attributes_size": 24,
+    "inherit": true,
+    "descriptor": "non-null merged current-user DACL plus mandatory-label SACL",
+    "fatal": "crashpad_client_win.cc:330; chrome_elf.dll+0x1ff162",
+    "missing_contracts": [
+      "native-enforced per-client admission corresponding to the requested descriptor",
+      "named-pipe provider handle inheritance"
+    ],
+    "architecture_decision": "native generic identity-conditioned admission versus isolated userspace authority broker; pending user choice",
+    "state": "implemented; real Chrome protected/inheritable pipe succeeds in final 1/4-vCPU traces"
+  },
+  "prior_checkpoint_frontier": {
+    "component": "Chrome / Crashpad startup after successful Ultra-Space pipe creation",
+    "observed_failures": [
+      {
+        "operation": "InitializeCriticalSectionEx",
+        "source": "critical_section_with_debug_info.cc:35",
+        "last_error": 50
+      },
+      {
+        "operation": "OpenProcess",
+        "source": "crashpad_client_win.cc:430",
+        "last_error": 50
+      },
+      {
+        "operation": "delayed load SHELL32.dll!CommandLineToArgvW",
+        "library_error": 126
+      }
+    ],
+    "causal_boundary": "protected CreateNamedPipeW succeeds; crash server startup fails and reports self-termination at crashpad_client_win.cc:144",
+    "remaining_instrumentation": "Capture requested critical-section flags and OpenProcess rights before extending semantics; missing Shell32 delayed contract is separately identified."
+  },
+  "report": "docs/windows-startup-progress-2026-10-18.md"
+}

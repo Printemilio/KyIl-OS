@@ -16,25 +16,25 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ISO_PATH="$ROOT/build/vex-os.iso"
 SERIAL_LOG="$ROOT/build/vex-serial.log"
 
-# Charge vboxdrv si absent
+# Load vboxdrv if missing
 if ! lsmod | grep -q vboxdrv; then
-    echo "Chargement du module vboxdrv..."
+    echo "Loading vboxdrv module..."
     sudo modprobe vboxdrv || {
-        echo "Erreur : impossible de charger vboxdrv." >&2
-        echo "Installe linux-zen-headers + virtualbox-host-dkms puis relance." >&2
+        echo "Error: unable to load vboxdrv." >&2
+        echo "Install linux-zen-headers + virtualbox-host-dkms and try again." >&2
         exit 1
     }
 fi
 
 if ! command -v VBoxManage &>/dev/null; then
-    echo "Erreur : 'VBoxManage' introuvable dans PATH." >&2
+    echo "Error: 'VBoxManage' not found in PATH." >&2
     exit 1
 fi
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
     pwsh -NoProfile -File "$SCRIPT_DIR/build.ps1"
 elif [ ! -f "$ISO_PATH" ]; then
-    echo "Erreur : ISO introuvable à '$ISO_PATH'. Lance sans --skip-build pour compiler." >&2
+    echo "Error: ISO not found at '$ISO_PATH'. Run without --skip-build to build it." >&2
     exit 1
 fi
 
@@ -49,7 +49,6 @@ if [ -z "$EXISTING_VM" ]; then
         --audio-enabled on --audio-controller hda --audio-in on --audio-out on \
         --nic1 nat --nictype1 82540EM --cableconnected1 on \
         --boot1 dvd --boot2 none --boot3 none --boot4 none
-    VBoxManage storagectl "$VM_NAME" --name "IDE" --add ide --controller PIIX4
 else
     VBoxManage modifyvm "$VM_NAME" \
         --memory 512 --vram 128 \
@@ -57,6 +56,23 @@ else
         --graphicscontroller vmsvga \
         --audio-enabled on --audio-controller hda --audio-in on --audio-out on \
         --nic1 nat --nictype1 82540EM --cableconnected1 on
+fi
+
+has_storage_controller() {
+    VBoxManage showvminfo "$VM_NAME" --machinereadable | grep -q "storagecontrollername.*=\"$1\""
+}
+
+if ! has_storage_controller "SATA"; then
+    VBoxManage storagectl "$VM_NAME" --name "SATA" --add sata --controller IntelAhci --portcount 4 --bootable on
+fi
+
+if has_storage_controller "IDE"; then
+    VBoxManage storageattach "$VM_NAME" \
+        --storagectl "IDE" \
+        --port 0 \
+        --device 0 \
+        --type dvddrive \
+        --medium none 2>/dev/null || true
 fi
 
 [ -f "$SERIAL_LOG" ] && rm -f "$SERIAL_LOG"
@@ -67,7 +83,7 @@ VBoxManage setextradata "$VM_NAME" VBoxInternal2/EfiGraphicsResolution 1920x1080
 VBoxManage setextradata global GUI/MaxGuestResolution any
 
 VBoxManage storageattach "$VM_NAME" \
-    --storagectl "IDE" \
+    --storagectl "SATA" \
     --port 0 \
     --device 0 \
     --type dvddrive \

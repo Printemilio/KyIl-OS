@@ -1,0 +1,36 @@
+<!doctype html><meta charset="utf-8"><title>Vex SMP worker test</title>
+<style>body{font:20px sans-serif;background:#172436;color:#eef;padding:40px}pre{white-space:pre-wrap}</style>
+<h1 id="heading">Real WebKit / JSC parallel workers</h1>
+<p>Two real Web Workers, independent heaps, identical checked integer work.</p>
+<pre id="result">Starting workers...</pre>
+<script>
+const source=`
+function step(x) { for(let i=0;i<16;i++) x=(Math.imul(x,1664525)+1013904223)|0; return x; }
+let value=1, count=0, sum=0, begin=performance.now();
+// Repeated useful batches keep optimized code active long enough for CPU
+// attribution. The deadline bounds the test; it never fakes a scheduler wake.
+do { for(let i=0;i<100000;i++) {value=step(value);sum=(sum+value)|0;} count+=100000;
+} while(performance.now()-begin<20000);
+// Independent affine exponentiation verifies the ENTIRE accumulated result,
+// not just one warm-up value. Transform: x'=a*x+b; sum'=sum+c*x+d.
+let a=1,b=0;for(let i=0;i<16;i++){a=Math.imul(a,1664525);b=(Math.imul(b,1664525)+1013904223)|0;}
+function compose(p,q){return [Math.imul(p[0],q[0]),(Math.imul(p[0],q[1])+p[1])|0,
+ (q[2]+Math.imul(p[2],q[0]))|0,(q[3]+Math.imul(p[2],q[1])+p[3])|0];}
+let power=[a,b,a,b],exact=[1,0,0,0],n=count;
+while(n){if(n%2)exact=compose(power,exact);power=compose(power,power);n=Math.floor(n/2);}
+let expectedValue=(exact[0]+exact[1])|0,expectedSum=(exact[2]+exact[3])|0;
+if(value!==expectedValue || sum!==expectedSum)throw new Error('JIT full checksum mismatch');
+postMessage({count,sum,elapsed:performance.now()-begin,verified:true});`;
+const url=URL.createObjectURL(new Blob([source],{type:'text/javascript'}));
+let workers=[],results=[];
+for(let i=0;i<2;i++) {
+ const w=new Worker(url);workers.push(w);
+ w.onerror=e=>{document.title='Vex SMP FAILED';document.getElementById('result').textContent=e.message;};
+ w.onmessage=e=>{results[i]=e.data;document.getElementById('result').textContent=JSON.stringify(results,null,2);
+  if(results.filter(Boolean).length===2){document.title='Vex SMP workers PASS';
+   document.getElementById('heading').textContent='Both JSC workers: verified PASS';
+   document.getElementById('heading').style.color='#20d080';
+   workers.forEach(w=>w.terminate());URL.revokeObjectURL(url);}
+ };
+}
+</script>

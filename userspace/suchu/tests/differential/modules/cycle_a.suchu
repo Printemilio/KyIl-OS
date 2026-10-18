@@ -1,0 +1,4 @@
+// Imports cycle_b, which imports this file back. Reaching either one has to
+// raise rather than loop.
+import "cycle_b.suchu";
+value = 1;

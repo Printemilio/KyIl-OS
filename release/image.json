@@ -1,0 +1,12 @@
+{
+  "snapshot": "2026-10-18",
+  "tag": "v2026.10.18",
+  "image": "build/kyilos.iso",
+  "bytes": 2114533376,
+  "sha256": "40CA8EE3387DDD3F27F36B786D190C0FA8BCDCB7C9FD02954AD2A524733AC893",
+  "kernel_sha256": "DEAEF6EC86C16580D2BB020D6CF980BDE34F52D94A2CB7EF1743742D90FB75F8",
+  "validated_vcpus": [1, 4],
+  "firmware_reference": "BIOS / PIIX3",
+  "chrome_gui": false,
+  "persistent_data_disk_included": false
+}

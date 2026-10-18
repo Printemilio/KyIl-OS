@@ -1,0 +1,21 @@
+LIBRARY kernel32.dll
+EXPORTS
+CloseHandle
+CreateEventA
+CreateFileA
+CreateThread
+ExitProcess
+GetCurrentDirectoryA
+GetEnvironmentVariableA
+GetLastError
+GetModuleFileNameA
+GetStdHandle
+GetSystemTimeAsFileTime
+GetTickCount
+OutputDebugStringA
+QueryPerformanceCounter
+QueryPerformanceFrequency
+SetEvent
+Sleep
+WaitForSingleObject
+WriteFile

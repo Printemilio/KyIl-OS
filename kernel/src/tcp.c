@@ -1,3 +1,4 @@
+#include <unos/network_state.h>
 #include <unos/tcp.h>
 
 #include <stddef.h>
@@ -9,11 +10,17 @@
 #include <unos/heap.h>
 #include <unos/ipv4.h>
 #include <unos/tty.h>
+#include <unos/irq.h>
+#include <unos/scheduler.h>
 
 #define TCP_DEBUG 0
 #define TCP_MAX_CONNECTIONS 8u
 #define TCP_BUFFER_SIZE 65536u
 #define TCP_MAX_SEGMENT_SIZE 1460u
+#define TCP_INITIAL_CWND_SEGMENTS 10u
+#define TCP_INITIAL_RTO_TICKS 100u
+#define TCP_MAX_RTO_TICKS 6000u
+#define TCP_MIN_SSTHRESH (2u * TCP_MAX_SEGMENT_SIZE)
 #define TCP_ARP_TIMEOUT 250000u
 #define TCP_ARP_RETRY_POLLS 256u
 #define TCP_CONNECT_TIMEOUT 120000u
@@ -72,6 +79,14 @@ typedef struct {
     uint16_t remote_window;
     uint8_t *rx_buffer;
     size_t rx_size;
+    uint8_t *tx_buffer;
+    size_t tx_size,tx_inflight;
+    uint32_t tx_sequence,retries;
+    uint32_t congestion_window, slow_start_threshold, retransmit_ticks;
+    uint8_t duplicate_acks, fast_retransmit_pending;
+    uint64_t last_send_tick,connect_tick;
+    uint8_t syn_sent,reset,timeout,closing;
+
 } tcp_socket_t;
 
 static tcp_socket_t sockets[TCP_MAX_CONNECTIONS];
@@ -137,16 +152,6 @@ static void tcp_log_u32(uint32_t value) {
         char out[2] = { digits[--count], '\0' };
         debug_log_puts(out);
     }
-}
-
-static void tcp_log_ipv4(uint32_t ip) {
-    tcp_log_u32((ip >> 24u) & 0xffu);
-    debug_log_puts(".");
-    tcp_log_u32((ip >> 16u) & 0xffu);
-    debug_log_puts(".");
-    tcp_log_u32((ip >> 8u) & 0xffu);
-    debug_log_puts(".");
-    tcp_log_u32(ip & 0xffu);
 }
 
 static void copy_bytes(void *dst, const void *src, size_t size) {
@@ -242,98 +247,25 @@ static tcp_socket_t *find_socket(uint32_t remote_ip, uint16_t remote_port, uint1
 static tcp_socket_t *alloc_socket(void) {
     for (size_t i = 0; i < TCP_MAX_CONNECTIONS; ++i) {
         if (!sockets[i].used) {
+            sockets[i]=(tcp_socket_t){0};
             sockets[i].used = 1;
             sockets[i].state = TCP_CLOSED;
             sockets[i].rx_size = 0;
             sockets[i].remote_window = TCP_WINDOW_DEFAULT;
+            sockets[i].congestion_window = TCP_INITIAL_CWND_SEGMENTS * TCP_MAX_SEGMENT_SIZE;
+            sockets[i].slow_start_threshold = TCP_WINDOW_DEFAULT;
+            sockets[i].retransmit_ticks = TCP_INITIAL_RTO_TICKS;
             sockets[i].rx_buffer = kmalloc(TCP_BUFFER_SIZE);
             if (sockets[i].rx_buffer == NULL) {
                 sockets[i].used = 0;
                 return NULL;
             }
+            sockets[i].tx_buffer=kmalloc(TCP_BUFFER_SIZE);
+            if(!sockets[i].tx_buffer){kfree(sockets[i].rx_buffer);sockets[i].rx_buffer=NULL;sockets[i].used=0;return NULL;}
             return &sockets[i];
         }
     }
-
     return NULL;
-}
-
-static int wait_for_arp(uint32_t ip) {
-    uint8_t mac[6];
-    const uint32_t local_ip = ipv4_get_local_ip();
-    uint32_t netmask = dhcp_netmask();
-    uint32_t next_hop = ip;
-
-    if (netmask == 0 && (local_ip & 0xffffff00u) == 0x0a000200u) {
-        netmask = 0xffffff00u;
-    }
-
-    if (netmask != 0 && (ip & netmask) != (local_ip & netmask)) {
-        next_hop = dhcp_gateway();
-        if (next_hop == 0) {
-            next_hop = VBOX_NAT_GATEWAY_IP;
-        }
-    }
-
-    debug_log_puts("tcp: wait_for_arp ");
-    tcp_log_ipv4(next_hop);
-    if (next_hop != ip) {
-        debug_log_puts(" gateway for ");
-        tcp_log_ipv4(ip);
-    }
-    debug_log_puts("\n");
-
-    tty_puts("tcp: wait_for_arp ");
-    print_ipv4(next_hop);
-    if (next_hop != ip) {
-        tty_puts(" gateway for ");
-        print_ipv4(ip);
-    }
-    tty_putchar('\n');
-
-    (void)arp_request(next_hop);
-    for (uint32_t i = 0; i < TCP_ARP_TIMEOUT; ++i) {
-        if (arp_lookup(next_hop, mac) == 0) {
-            debug_log_puts("tcp: arp ok\n");
-            tty_puts("tcp: arp resolved after ");
-            print_u32(i);
-            tty_puts(" polls\n");
-            return 0;
-        }
-
-        if ((i % TCP_ARP_RETRY_POLLS) == (TCP_ARP_RETRY_POLLS - 1u)) {
-            (void)arp_request(next_hop);
-        }
-
-        if (i != 0 && (i % 100000u) == 0) {
-            tty_puts("tcp: arp polls ");
-            print_u32(i);
-            tty_putchar('\n');
-        }
-
-        (void)ethernet_poll();
-    }
-
-    if (next_hop != VBOX_NAT_GATEWAY_IP) {
-        debug_log_puts("tcp: arp fallback gateway ");
-        tcp_log_ipv4(VBOX_NAT_GATEWAY_IP);
-        debug_log_puts("\n");
-        (void)arp_request(VBOX_NAT_GATEWAY_IP);
-        for (uint32_t i = 0; i < TCP_ARP_TIMEOUT; ++i) {
-            if (arp_lookup(VBOX_NAT_GATEWAY_IP, mac) == 0) {
-                debug_log_puts("tcp: arp gateway ok\n");
-                return 0;
-            }
-            if ((i % TCP_ARP_RETRY_POLLS) == (TCP_ARP_RETRY_POLLS - 1u)) {
-                (void)arp_request(VBOX_NAT_GATEWAY_IP);
-            }
-            (void)ethernet_poll();
-        }
-    }
-
-    tty_puts("tcp: arp timeout\n");
-    debug_log_puts("tcp: arp timeout\n");
-    return -1;
 }
 
 static int tcp_send_segment(tcp_socket_t *socket, uint8_t flags, const void *data, size_t size) {
@@ -386,11 +318,12 @@ static int tcp_send_segment(tcp_socket_t *socket, uint8_t flags, const void *dat
     return result;
 }
 
-static void tcp_handle_ipv4(uint32_t src_ip, const void *payload, size_t size) {
+static void tcp_handle_ipv4(uint32_t src_ip,uint32_t dest_ip,const void *payload,size_t size) {
     if (payload == NULL || size < sizeof(tcp_header_t)) {
         return;
     }
 
+    if(size>sizeof(tcp_header_t)+TCP_MAX_SEGMENT_SIZE || tcp_checksum(src_ip,dest_ip,payload,size)!=0)return;
     const tcp_header_t *header = payload;
     const uint16_t src_port = bswap16(header->src_port);
     const uint16_t dest_port = bswap16(header->dest_port);
@@ -428,6 +361,7 @@ static void tcp_handle_ipv4(uint32_t src_ip, const void *payload, size_t size) {
     if ((header->flags & TCP_RST) != 0) {
         tty_puts("tcp: rx rst\n");
         socket->state = TCP_CLOSED;
+        socket->reset=1;
         return;
     }
 
@@ -441,11 +375,47 @@ static void tcp_handle_ipv4(uint32_t src_ip, const void *payload, size_t size) {
         return;
     }
 
-    if (socket->state == TCP_ESTABLISHED && (header->flags & TCP_ACK) != 0 && ack > socket->send_unacked) {
-        socket->send_unacked = ack;
-        tty_puts("tcp: ack advanced ");
-        print_u32(ack);
-        tty_putchar('\n');
+    if ((socket->state == TCP_ESTABLISHED || socket->state == TCP_FIN_WAIT) &&
+        (header->flags & TCP_ACK) && (int32_t)(ack-socket->send_unacked)>0 &&
+        (int32_t)(socket->send_seq-ack)>=0) {
+        const uint32_t acknowledged = ack - socket->send_unacked;
+        socket->send_unacked=ack;
+        if(socket->tx_inflight && (int32_t)(ack-socket->tx_sequence)>0){
+            size_t count=(uint32_t)(ack-socket->tx_sequence);
+            if(count>socket->tx_inflight)count=socket->tx_inflight;
+            move_bytes(socket->tx_buffer,socket->tx_buffer+count,socket->tx_size-count);
+            socket->tx_size-=count;socket->tx_inflight-=count;
+            socket->tx_sequence+=(uint32_t)count;socket->retries=0;
+        }
+        if (acknowledged != 0u) {
+            if (socket->tx_inflight == 0u) socket->tx_sequence = ack;
+            socket->duplicate_acks = 0u;
+            socket->fast_retransmit_pending = 0u;
+            socket->last_send_tick = irq_timer_ticks();
+            socket->retransmit_ticks = TCP_INITIAL_RTO_TICKS;
+            if (socket->congestion_window < socket->slow_start_threshold) {
+                socket->congestion_window += acknowledged;
+            } else {
+                uint64_t increase = (uint64_t)TCP_MAX_SEGMENT_SIZE * acknowledged /
+                                    socket->congestion_window;
+                if (increase == 0u) increase = 1u;
+                socket->congestion_window += (uint32_t)increase;
+            }
+            if (socket->congestion_window > TCP_WINDOW_DEFAULT)
+                socket->congestion_window = TCP_WINDOW_DEFAULT;
+        }
+    } else if (socket->state == TCP_ESTABLISHED &&
+               (header->flags & TCP_ACK) != 0u && data_size == 0u &&
+               ack == socket->send_unacked && socket->tx_inflight != 0u) {
+        if (socket->duplicate_acks < 255u) ++socket->duplicate_acks;
+        if (socket->duplicate_acks == 3u) {
+            uint32_t flight = socket->send_seq - socket->send_unacked;
+            socket->slow_start_threshold = flight / 2u;
+            if (socket->slow_start_threshold < TCP_MIN_SSTHRESH)
+                socket->slow_start_threshold = TCP_MIN_SSTHRESH;
+            socket->congestion_window = TCP_MAX_SEGMENT_SIZE;
+            socket->fast_retransmit_pending = 1u;
+        }
     }
 
     if (socket->state == TCP_ESTABLISHED && data_size != 0 && seq == socket->recv_seq) {
@@ -483,9 +453,9 @@ static void tcp_handle_ipv4(uint32_t src_ip, const void *payload, size_t size) {
         tty_putchar('\n');
     }
 
-    if ((header->flags & TCP_FIN) != 0) {
+    if ((header->flags & TCP_FIN) != 0 && seq+(uint32_t)data_size==socket->recv_seq) {
         tty_puts("tcp: rx fin\n");
-        socket->recv_seq = seq + 1u;
+        socket->recv_seq += 1u;
         (void)tcp_send_segment(socket, TCP_ACK, NULL, 0);
         socket->state = TCP_CLOSED;
     }
@@ -507,188 +477,178 @@ static void tcp_init_once(void) {
     tcp_initialized = 1;
 }
 
-int tcp_connect(uint32_t ip, uint16_t port) {
-    debug_log_puts("tcp: connect begin ");
-    tcp_log_ipv4(ip);
-    debug_log_puts(":");
-    tcp_log_u32(port);
-    debug_log_puts("\n");
-    tty_puts("tcp: entry\n");
-    tcp_init_once();
-    tty_puts("tcp: after init\n");
-
-    if (ip == 0) {
-        debug_log_puts("tcp: failed ip 0\n");
-        tty_puts("tcp: preconnect failed ip 0\n");
-        return -1;
-    }
-
-    if (port == 0) {
-        debug_log_puts("tcp: failed port 0\n");
-        tty_puts("tcp: preconnect failed port 0\n");
-        return -1;
-    }
-
-    if (ipv4_get_local_ip() == 0) {
-        debug_log_puts("tcp: failed local ip 0\n");
-        tty_puts("tcp: preconnect failed local ip 0\n");
-        return -1;
-    }
-
-    if (wait_for_arp(ip) != 0) {
-        debug_log_puts("tcp: failed arp\n");
-        tty_puts("tcp: preconnect failed arp\n");
-        return -1;
-    }
-    tty_puts("tcp: after preconnect\n");
-
-    tcp_socket_t *socket = alloc_socket();
-    if (socket == NULL) {
-        debug_log_puts("tcp: failed no socket\n");
-        tty_puts("tcp: no socket\n");
-        return -1;
-    }
-    tty_puts("tcp: after socket alloc\n");
-
-    socket->remote_ip = ip;
-    socket->remote_port = port;
-    socket->local_port = next_local_port++;
-    socket->send_seq = next_initial_seq;
-    socket->send_unacked = socket->send_seq;
-    socket->recv_seq = 0;
-    socket->state = TCP_SYN_SENT;
-    next_initial_seq += 0x10000u;
-
-    const uint32_t syn_seq = socket->send_seq;
-    for (uint32_t attempt = 0; attempt < TCP_RETRANSMIT_COUNT && socket->state != TCP_ESTABLISHED; ++attempt) {
-        tty_puts("tcp: connect dst ");
-        print_ipv4(ip);
-        tty_puts(" port ");
-        print_u32(port);
-        tty_puts(" attempt ");
-        print_u32(attempt + 1u);
-        tty_putchar('\n');
-
-        socket->send_seq = syn_seq;
-        socket->send_unacked = syn_seq;
-        debug_log_puts("tcp: syn send attempt ");
-        tcp_log_u32(attempt + 1u);
-        debug_log_puts("\n");
-        if (tcp_send_segment(socket, TCP_SYN, NULL, 0) != 0) {
-            debug_log_puts("tcp: syn send failed\n");
-            tty_puts("tcp: SYN send failed\n");
-        } else {
-            debug_log_puts("tcp: syn sent\n");
-            tty_puts("tcp: SYN sent\n");
-        }
-        socket->send_seq = syn_seq + 1u;
-
-        uint32_t polls = 0;
-        for (; polls < TCP_CONNECT_TIMEOUT && socket->state != TCP_ESTABLISHED; ++polls) {
-            (void)ethernet_poll();
-        }
-
-        tty_puts("tcp: polls ");
-        print_u32(polls);
-        tty_putchar('\n');
-    }
-
-    if (socket->state != TCP_ESTABLISHED) {
-        debug_log_puts("tcp: connect timeout\n");
-        tty_puts("tcp: connect timeout\n");
-        kfree(socket->rx_buffer);
-        socket->rx_buffer = NULL;
-        socket->used = 0;
-        socket->state = TCP_CLOSED;
-        return -1;
-    }
-
-    tty_puts("tcp: connected\n");
-    debug_log_puts("tcp: connected\n");
-    return socket_index(socket);
+static uint64_t tcp_lock(void){
+#ifdef VEX_NETWORK_HOST_TEST
+    return 0;
+#else
+    return network_state_lock();
+#endif
 }
-
-int tcp_send(int sock, const void *data, size_t size) {
-    return tcp_send_timeout(sock, data, size, TCP_IO_TIMEOUT);
+static void tcp_unlock(uint64_t f){
+#ifdef VEX_NETWORK_HOST_TEST
+    (void)f;
+#else
+    network_state_unlock(f);
+#endif
 }
-
-int tcp_send_timeout(int sock, const void *data, size_t size, uint32_t timeout_polls) {
-    tcp_socket_t *socket = socket_from_handle(sock);
-    if (socket == NULL || socket->state != TCP_ESTABLISHED || data == NULL) {
-        return -1;
-    }
-
-    const uint8_t *bytes = data;
-    size_t sent = 0;
-
-    while (sent < size) {
-        const size_t chunk_size = (size - sent) > TCP_MAX_SEGMENT_SIZE ? TCP_MAX_SEGMENT_SIZE : (size - sent);
-        const uint32_t seq = socket->send_seq;
-        socket->send_unacked = seq;
-
-        for (uint32_t attempt = 0; attempt < TCP_RETRANSMIT_COUNT; ++attempt) {
-            socket->send_seq = seq;
-            if (tcp_send_segment(socket, TCP_PSH | TCP_ACK, bytes + sent, chunk_size) != 0) {
-                return -1;
+int tcp_connect_start(uint32_t ip,uint16_t port) {
+    uint64_t flags=tcp_lock();tcp_init_once();
+    if(!ip || !port || !ipv4_get_local_ip()){tcp_unlock(flags);return -1;}
+    tcp_socket_t *s=alloc_socket();if(!s){tcp_unlock(flags);return -1;}
+    s->remote_ip=ip;s->remote_port=port;s->local_port=next_local_port++;
+    s->send_seq=s->send_unacked=next_initial_seq;next_initial_seq+=0x10000u;
+    s->state=TCP_SYN_SENT;s->connect_tick=irq_timer_ticks();
+    int handle=socket_index(s);tcp_unlock(flags);ethernet_wake();return handle;
+}
+int tcp_connection_status(int handle){
+    uint64_t flags=tcp_lock();tcp_socket_t *s=socket_from_handle(handle);
+    int result=!s || s->state==TCP_CLOSED?-1:s->state==TCP_SYN_SENT?0:1;
+    tcp_unlock(flags);return result;
+}
+int tcp_connection_error(int handle){
+    tcp_socket_t *s=socket_from_handle(handle);
+    return !s?1:s->timeout?2:s->reset?1:0;
+}
+/* Called by the native network worker. Keep a bounded sliding window in flight
+ * instead of waiting for an ACK after every 1460-byte segment. This is the
+ * difference between stop-and-wait throughput (one MSS per RTT) and a usable
+ * TCP stream. ACKs advance the oldest unacknowledged byte and grow the window;
+ * loss recovery retransmits only that oldest segment under strict W^X-safe,
+ * ordinary network semantics. */
+int tcp_service(void){
+    uint64_t flags=tcp_lock(),now=irq_timer_ticks();int pending=0;
+    for(unsigned i=0;i<TCP_MAX_CONNECTIONS;i++){
+        tcp_socket_t *s=&sockets[i];if(!s->used)continue;
+        if(s->closing && (s->state==TCP_CLOSED ||
+           (s->state==TCP_FIN_WAIT && ((int32_t)(s->send_unacked-s->send_seq)>=0 || now-s->last_send_tick>=200)))){
+            kfree(s->rx_buffer);kfree(s->tx_buffer);*s=(tcp_socket_t){0};continue;
+        }
+        if(s->closing)pending=1;
+        if(s->closing && s->state==TCP_ESTABLISHED && !s->tx_size){
+            (void)tcp_send_segment(s,TCP_FIN|TCP_ACK,NULL,0);s->send_seq++;
+            s->state=TCP_FIN_WAIT;s->last_send_tick=now;continue;
+        }
+        if(s->state==TCP_SYN_SENT){
+            pending=1;
+            if(now-s->connect_tick>=1000){s->state=TCP_CLOSED;s->timeout=1;continue;}
+            uint32_t hop=s->remote_ip,mask=dhcp_netmask();uint8_t mac[6];
+            if(mask && (hop&mask)!=(ipv4_get_local_ip()&mask))hop=dhcp_gateway();
+            if(arp_lookup(hop,mac)){
+                if(!s->retries || now-s->last_send_tick>=100){arp_request(hop);s->last_send_tick=now;s->retries++;}
+                continue;
             }
-
-            socket->send_seq = seq + (uint32_t)chunk_size;
-            for (uint32_t i = 0; i < timeout_polls; ++i) {
-                if (socket->send_unacked >= socket->send_seq) {
-                    sent += chunk_size;
-                    goto next_chunk;
+            if(!s->syn_sent || now-s->last_send_tick>=100){
+                uint32_t seq=s->send_seq;if(s->syn_sent)s->send_seq--;
+                int result=tcp_send_segment(s,TCP_SYN,NULL,0);
+                s->send_seq=seq;
+                if(!result){if(!s->syn_sent)s->send_seq++;s->syn_sent=1;}
+                s->last_send_tick=now;
+            }
+        }else if(s->state==TCP_ESTABLISHED && s->tx_size){
+            pending=1;
+            uint32_t flight = s->send_seq - s->send_unacked;
+            const int timed_out = s->tx_inflight != 0u &&
+                now - s->last_send_tick >= s->retransmit_ticks;
+            if (s->fast_retransmit_pending || timed_out) {
+                if (timed_out) {
+                    if (s->retries >= 5u) {
+                        s->state=TCP_CLOSED;s->timeout=1u;continue;
+                    }
+                    s->slow_start_threshold = flight / 2u;
+                    if (s->slow_start_threshold < TCP_MIN_SSTHRESH)
+                        s->slow_start_threshold = TCP_MIN_SSTHRESH;
+                    s->congestion_window = TCP_MAX_SEGMENT_SIZE;
+                    s->duplicate_acks = 0u;
+                    ++s->retries;
+                    if (s->retransmit_ticks < TCP_MAX_RTO_TICKS / 2u)
+                        s->retransmit_ticks *= 2u;
+                    else s->retransmit_ticks = TCP_MAX_RTO_TICKS;
+                } else {
+                    s->fast_retransmit_pending = 0u;
                 }
-                (void)ethernet_poll();
+                size_t n=s->tx_inflight;
+                if(n>TCP_MAX_SEGMENT_SIZE)n=TCP_MAX_SEGMENT_SIZE;
+                uint32_t seq=s->send_seq;s->send_seq=s->tx_sequence;
+                int result=tcp_send_segment(s,TCP_PSH|TCP_ACK,s->tx_buffer,n);
+                s->send_seq=seq;
+                if(result==0)s->last_send_tick=now;
+                continue;
+            }
+
+            uint32_t window=s->congestion_window;
+            if(window>s->remote_window)window=s->remote_window;
+            while(flight<window){
+                size_t unsent=s->tx_size-s->tx_inflight;
+                size_t allowance=(size_t)(window-flight);
+                if(unsent>TCP_MAX_SEGMENT_SIZE)unsent=TCP_MAX_SEGMENT_SIZE;
+                if(unsent>allowance)unsent=allowance;
+                if(unsent==0u)break;
+                if(s->tx_inflight==0u)s->tx_sequence=s->send_unacked;
+                uint32_t seq=s->send_seq;
+                int result=tcp_send_segment(s,TCP_PSH|TCP_ACK,
+                                            s->tx_buffer+s->tx_inflight,unsent);
+                if(result!=0){
+                    /* Preserve sequence and queued bytes; retry after the next
+                     * network event/timer rather than reporting a false send. */
+                    s->send_seq=seq;
+                    break;
+                }
+                s->send_seq+=(uint32_t)unsent;
+                s->tx_inflight+=unsent;
+                flight+=(uint32_t)unsent;
+                if(s->tx_inflight==unsent){
+                    s->last_send_tick=now;s->retries=0u;
+                    s->retransmit_ticks=TCP_INITIAL_RTO_TICKS;
+                }
             }
         }
-
-        return -1;
-
-next_chunk:
-        continue;
     }
-
-    return 0;
+    tcp_unlock(flags);return pending;
 }
-
-int tcp_recv(int sock, void *buffer, size_t *size) {
-    return tcp_recv_timeout(sock, buffer, size, TCP_IO_TIMEOUT);
+int64_t tcp_try_write(int handle,const void *data,size_t size){
+    uint64_t flags=tcp_lock();tcp_socket_t *s=socket_from_handle(handle);
+    if(!s || s->state!=TCP_ESTABLISHED){tcp_unlock(flags);return -1;}
+    if(!size){tcp_unlock(flags);return 0;}
+    size_t n=TCP_BUFFER_SIZE-s->tx_size;if(n>size)n=size;
+    if(!n){tcp_unlock(flags);return -2;}
+    copy_bytes(s->tx_buffer+s->tx_size,data,n);s->tx_size+=n;
+    tcp_unlock(flags);ethernet_wake();return (int64_t)n;
 }
-
-int tcp_recv_timeout(int sock, void *buffer, size_t *size, uint32_t timeout_polls) {
-    tcp_socket_t *socket = socket_from_handle(sock);
-    if (socket == NULL || buffer == NULL || size == NULL) {
-        return -1;
-    }
-
-    if (socket->state == TCP_CLOSED && socket->rx_size == 0u) {
-        *size = 0u;
-        return 0;
-    }
-
-    for (uint32_t i = 0; i < timeout_polls && socket->rx_size == 0; ++i) {
-        (void)ethernet_poll();
-    }
-
-    if (socket->rx_size == 0) {
-        if (socket->state == TCP_CLOSED) {
-            *size = 0u;
-            return 0;
-        }
-        return -1;
-    }
-
-    const size_t copy_size = *size < socket->rx_size ? *size : socket->rx_size;
-    copy_bytes(buffer, socket->rx_buffer, copy_size);
-
-    if (copy_size < socket->rx_size) {
-        move_bytes(socket->rx_buffer, socket->rx_buffer + copy_size, socket->rx_size - copy_size);
-    }
-
-    socket->rx_size -= copy_size;
-    *size = copy_size;
-    return 0;
+int64_t tcp_try_read(int handle,void *data,size_t size){
+    uint64_t flags=tcp_lock();tcp_socket_t *s=socket_from_handle(handle);
+    if(!s){tcp_unlock(flags);return -1;}
+    if(!size){tcp_unlock(flags);return 0;}
+    if(!s->rx_size){int result=s->state==TCP_CLOSED?(s->reset||s->timeout?-1:0):-2;tcp_unlock(flags);return result;}
+    size_t n=s->rx_size;if(n>size)n=size;
+    copy_bytes(data,s->rx_buffer,n);move_bytes(s->rx_buffer,s->rx_buffer+n,s->rx_size-n);s->rx_size-=n;
+    /* Consumption reopens the advertised receive window. */
+    if(s->state==TCP_ESTABLISHED)(void)tcp_send_segment(s,TCP_ACK,NULL,0);
+    tcp_unlock(flags);return (int64_t)n;
 }
+int tcp_connect(uint32_t ip,uint16_t port){
+    int handle=tcp_connect_start(ip,port);if(handle<0)return -1;
+    while(tcp_connection_status(handle)==0){ethernet_poll();tcp_service();process_sleep_ticks(1);}
+    if(tcp_connection_status(handle)<0){tcp_close(handle);return -1;}
+    return handle;
+}
+int tcp_send_timeout(int handle,const void *data,size_t size,uint32_t timeout_polls){
+    uint64_t start=irq_timer_ticks(),limit=((uint64_t)timeout_polls+999u)/1000u;if(!limit)limit=1;
+    size_t sent=0;
+    while(sent<size){int64_t n=tcp_try_write(handle,(const uint8_t *)data+sent,size-sent);
+        if(n>=0)sent+=(size_t)n;else if(n!=-2)return -1;
+        if(sent<size){if(irq_timer_ticks()-start>=limit)return -1;ethernet_poll();tcp_service();process_sleep_ticks(1);}}
+    for(;;){tcp_socket_t *s=socket_from_handle(handle);if(!s || s->state!=TCP_ESTABLISHED)return -1;
+        if(!s->tx_size)return 0;if(irq_timer_ticks()-start>=limit)return -1;
+        ethernet_poll();tcp_service();process_sleep_ticks(1);}
+}
+int tcp_send(int handle,const void *data,size_t size){return tcp_send_timeout(handle,data,size,TCP_IO_TIMEOUT);}
+int tcp_recv_timeout(int handle,void *data,size_t *size,uint32_t timeout_polls){
+    uint64_t start=irq_timer_ticks(),limit=((uint64_t)timeout_polls+999u)/1000u;if(!limit)limit=1;
+    for(;;){int64_t n=tcp_try_read(handle,data,*size);if(n>=0){*size=(size_t)n;return 0;}
+        if(n!=-2 || irq_timer_ticks()-start>=limit)return -1;
+        ethernet_poll();tcp_service();process_sleep_ticks(1);}
+}
+int tcp_recv(int handle,void *data,size_t *size){return tcp_recv_timeout(handle,data,size,TCP_IO_TIMEOUT);}
 
 int tcp_can_read(int sock) {
     tcp_socket_t *socket = socket_from_handle(sock);
@@ -703,7 +663,7 @@ int tcp_can_write(int sock) {
     if (socket == NULL) {
         return 0;
     }
-    return socket->state == TCP_ESTABLISHED;
+    return socket->state == TCP_ESTABLISHED && socket->tx_size<TCP_BUFFER_SIZE;
 }
 
 int tcp_is_closed(int sock) {
@@ -715,26 +675,13 @@ int tcp_is_closed(int sock) {
 }
 
 void tcp_close(int sock) {
-    tcp_socket_t *socket = socket_from_handle(sock);
-    if (socket == NULL) {
-        return;
+    uint64_t flags=tcp_lock();tcp_socket_t *s=socket_from_handle(sock);
+    if(s){
+        if(s->state==TCP_CLOSED || s->state==TCP_SYN_SENT){
+            kfree(s->rx_buffer);kfree(s->tx_buffer);*s=(tcp_socket_t){0};
+        }else s->closing=1;
     }
-
-    if (socket->state == TCP_ESTABLISHED) {
-        socket->state = TCP_FIN_WAIT;
-        (void)tcp_send_segment(socket, TCP_FIN | TCP_ACK, NULL, 0);
-        ++socket->send_seq;
-        for (uint32_t i = 0; i < TCP_CLOSE_TIMEOUT; ++i) {
-            (void)ethernet_poll();
-            if (socket->send_unacked >= socket->send_seq) {
-                break;
-            }
-        }
-    }
-
-    socket->state = TCP_CLOSED;
-    kfree(socket->rx_buffer);
-    socket->rx_buffer = NULL;
-    socket->rx_size = 0;
-    socket->used = 0;
+    tcp_unlock(flags);ethernet_wake();
 }
+
+uint16_t tcp_local_port(int sock){tcp_socket_t *s=socket_from_handle(sock);return s?s->local_port:0;}

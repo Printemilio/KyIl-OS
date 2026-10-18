@@ -1,0 +1,550 @@
+// A raycaster, in Suchu.
+//
+// The world is a grid. For every column of the screen a ray is walked through
+// that grid until it meets a wall, and the distance it travelled decides how
+// tall that column's slice of wall is. Nothing here is 3D: it is a 2D map read
+// one column at a time, which is how this was done before hardware could do
+// anything else.
+//
+// The walk is DDA. Rather than stepping a ray forward a little at a time and
+// asking whether it has arrived -- which is either slow or inaccurate, and
+// usually both -- it jumps straight from one grid line to the next, so the
+// number of steps is the number of cells crossed and never more.
+//
+// Everything in a frame goes out in a handful of calls: the walls as one flat
+// list of rectangles, the cores as another, the minimap as a third. The loops
+// over the shapes run inside the backend. Painting a column at a time would be
+// hundreds of calls a frame and the language would spend its life in the
+// drawing rather than in the raycaster.
+//
+//   ZQSD or arrows   move
+//   mouse            look, after one click to capture it
+//   shift            run
+//   escape           release the mouse, again to leave
+
+import draw;
+import keys;
+import mouse;
+
+MAP_W = 24;
+MAP_H = 24;
+
+WIDTH = 720;
+HEIGHT = 430;
+// One ray per column would be seven hundred rays a frame. Two pixels per ray is
+// indistinguishable at this size and halves the work.
+STEP = 2;
+
+FOV = 0.66;
+
+world = [];
+depth = [];
+
+// Set by find_spawn(), because writing a position by hand and trusting it is
+// how the player ended up standing inside a wall: (3.5, 3.5) looked like open
+// floor on the map above and is the '=' on row three.
+px = 0.0;
+py = 0.0;
+angle = 0.0;
+
+frame = 0;
+started = 0.0;
+collected = 0;
+message = "find the four cores";
+finished = 0;
+
+core_x = [];
+core_y = [];
+core_alive = [];
+
+// ---------------------------------------------------------------- the world
+
+fun row(text) {
+  index = 0;
+  while (index < len(text)) {
+    letter = text[index];
+    value = 0;
+    if letter == "#" { value = 1; }
+    if letter == "=" { value = 2; }
+    if letter == "%" { value = 3; }
+    if letter == "@" { value = 4; }
+    push(world, value);
+    index = index + 1;
+  }
+}
+
+fun build_world() {
+  row("########################");
+  row("#..........#...........#");
+  row("#..====....#....%%%%...#");
+  row("#..=.......#....%......#");
+  row("#..=..##........%..@@..#");
+  row("#..=..##........%..@...#");
+  row("#..====.....#####..@@..#");
+  row("#...........#...#......#");
+  row("#....@@@....#...#..=====");
+  row("#....@..........#......#");
+  row("#....@@@....#...#......#");
+  row("#...........#####......#");
+  row("######.###############.#");
+  row("#......#........%%%%%%.#");
+  row("#..##..#...............#");
+  row("#..##.....%%%%%%%..##..#");
+  row("#......#..%.....%..##..#");
+  row("#..#####..%..@..%......#");
+  row("#..#......%..@..%..=====");
+  row("#..#..=====..@..%......#");
+  row("#.....=...%%%%%%%......#");
+  row("#..####................#");
+  row("#......................#");
+  row("########################");
+}
+
+fun cell(x, y) {
+  if x < 0 || y < 0 || x >= MAP_W || y >= MAP_H {
+    return 1;
+  }
+  return world[y * MAP_W + x];
+}
+
+fun is_solid(x, y) {
+  return cell(x, y) != 0;
+}
+
+fun place_cores() {
+  add_core(19.5, 5.5);
+  add_core(5.5, 9.5);
+  add_core(13.5, 18.5);
+  add_core(6.5, 20.5);
+}
+
+fun add_core(x, y) {
+  push(core_x, x);
+  push(core_y, y);
+  push(core_alive, 1);
+}
+
+// ---------------------------------------------------------------- moving
+
+fun try_move(nx, ny) {
+  // Each axis on its own, so meeting a wall at an angle slides along it rather
+  // than stopping dead. A margin keeps the camera off the surface, where a wall
+  // would fill the screen.
+  margin = 0.18;
+  if !is_solid(round(floor(nx + sign(nx - px) * margin)), round(floor(py))) {
+    px = nx;
+  }
+  if !is_solid(round(floor(px)), round(floor(ny + sign(ny - py) * margin))) {
+    py = ny;
+  }
+}
+
+fun sign(value) {
+  if value > 0.0 { return 1.0; }
+  if value < 0.0 { return 0.0 - 1.0; }
+  return 0.0;
+}
+
+fun update() {
+  frame = frame + 1;
+  if finished == 1 { return none; }
+
+  speed = 0.055;
+  turn = 0.035;
+  if keys.down("shift") || keys.down("rshift") { speed = 0.1; }
+
+  if keys.down("left") { angle = angle - turn; }
+  if keys.down("right") { angle = angle + turn; }
+
+  // The mouse turns the head. Captured, so the pointer is held in the middle
+  // and the movement never runs out of screen to cross.
+  if mouse.captured() {
+    angle = angle + mouse.dx() * 0.0035;
+  }
+  // Click once to hand the pointer over, escape gives it back.
+  if mouse.pressed("left") { mouse.capture(true); }
+  if keys.pressed("escape") { mouse.capture(false); }
+
+  forward = 0.0;
+  strafe = 0.0;
+  if keys.down("up") || keys.down("w") { forward = speed; }
+  if keys.down("down") || keys.down("s") { forward = 0.0 - speed; }
+  // raylib reports where a key *is*, not what is printed on it, so the cluster
+  // that reads WASD on a QWERTY keyboard reads ZQSD on an AZERTY one and this
+  // is the same four keys either way.
+  if keys.down("a") { strafe = 0.0 - speed; }
+  if keys.down("d") { strafe = speed; }
+
+  if forward != 0.0 || strafe != 0.0 {
+    dir_x = cos(angle);
+    dir_y = sin(angle);
+    nx = px + dir_x * forward - dir_y * strafe;
+    ny = py + dir_y * forward + dir_x * strafe;
+    try_move(nx, ny);
+  }
+
+  collect();
+}
+
+fun collect() {
+  which = 0;
+  while (which < len(core_x)) {
+    if core_alive[which] == 1 {
+      dx = core_x[which] - px;
+      dy = core_y[which] - py;
+      if dx * dx + dy * dy < 0.36 {
+        core_alive[which] = 0;
+        collected = collected + 1;
+        if collected == len(core_x) {
+          message = "all four recovered - press escape";
+          finished = 1;
+        } else {
+          message = "" @ collected @ " of " @ len(core_x) @ " recovered";
+        }
+      }
+    }
+    which = which + 1;
+  }
+}
+
+// ---------------------------------------------------------------- drawing
+
+fun shade_for(kind, side, distance) {
+  r = 200;
+  g = 200;
+  b = 200;
+  if kind == 1 { r = 196; g = 82;  b = 78; }
+  if kind == 2 { r = 78;  g = 148; b = 196; }
+  if kind == 3 { r = 198; g = 164; b = 70; }
+  if kind == 4 { r = 104; g = 190; b = 118; }
+
+  // Distance dims a wall, and a wall met edge-on is darker than one met flat.
+  // The two together are what makes a flat colour read as a corner.
+  fade = 1.0 / (1.0 + distance * distance * 0.018);
+  if side == 1 { fade = fade * 0.6; }
+
+  return round(r * fade) * 65536 + round(g * fade) * 256 + round(b * fade);
+}
+
+fun cast_walls() {
+  columns = [];
+  depth.clear();
+
+  dir_x = cos(angle);
+  dir_y = sin(angle);
+  plane_x = 0.0 - dir_y * FOV;
+  plane_y = dir_x * FOV;
+
+  column = 0;
+  while (column < WIDTH) {
+    // -1 at the left edge of the screen, +1 at the right.
+    across = 2.0 * column / WIDTH - 1.0;
+    ray_x = dir_x + plane_x * across;
+    ray_y = dir_y + plane_y * across;
+
+    map_x = round(floor(px));
+    map_y = round(floor(py));
+
+    // How far along the ray one whole cell is, in each direction.
+    delta_x = 1000000.0;
+    if ray_x != 0.0 { delta_x = abs(1.0 / ray_x); }
+    delta_y = 1000000.0;
+    if ray_y != 0.0 { delta_y = abs(1.0 / ray_y); }
+
+    step_x = 1;
+    step_y = 1;
+    side_x = 0.0;
+    side_y = 0.0;
+
+    if ray_x < 0.0 {
+      step_x = 0 - 1;
+      side_x = (px - map_x) * delta_x;
+    } else {
+      side_x = (map_x + 1.0 - px) * delta_x;
+    }
+    if ray_y < 0.0 {
+      step_y = 0 - 1;
+      side_y = (py - map_y) * delta_y;
+    } else {
+      side_y = (map_y + 1.0 - py) * delta_y;
+    }
+
+    // The walk: always advance towards whichever grid line is nearer.
+    hit = 0;
+    side = 0;
+    guard = 0;
+    while (hit == 0 && guard < 96) {
+      guard = guard + 1;
+      if side_x < side_y {
+        side_x = side_x + delta_x;
+        map_x = map_x + step_x;
+        side = 0;
+      } else {
+        side_y = side_y + delta_y;
+        map_y = map_y + step_y;
+        side = 1;
+      }
+      if is_solid(map_x, map_y) { hit = 1; }
+    }
+
+    // Measured along the ray, not to the player. Measuring to the player would
+    // bend every straight wall into a fisheye.
+    distance = 0.02;
+    if side == 0 {
+      distance = side_x - delta_x;
+    } else {
+      distance = side_y - delta_y;
+    }
+    if distance < 0.02 { distance = 0.02; }
+
+    push(depth, distance);
+
+    height = HEIGHT / distance;
+    top = HEIGHT / 2.0 - height / 2.0;
+    bottom = HEIGHT / 2.0 + height / 2.0;
+    if top < 0.0 { top = 0.0; }
+    if bottom > HEIGHT { bottom = HEIGHT; }
+
+    push(columns, column);
+    push(columns, round(top));
+    push(columns, STEP);
+    push(columns, round(bottom - top));
+    push(columns, shade_for(cell(map_x, map_y), side, distance));
+
+    column = column + STEP;
+  }
+
+  draw.rects(columns);
+}
+
+fun draw_cores() {
+  slices = [];
+
+  dir_x = cos(angle);
+  dir_y = sin(angle);
+  plane_x = 0.0 - dir_y * FOV;
+  plane_y = dir_x * FOV;
+  determinant = plane_x * dir_y - dir_x * plane_y;
+  if abs(determinant) < 0.00001 { return none; }
+
+  order = far_to_near();
+  index = 0;
+  while (index < len(order)) {
+    which = order[index];
+    index = index + 1;
+    if core_alive[which] == 0 { continue; }
+
+    rel_x = core_x[which] - px;
+    rel_y = core_y[which] - py;
+
+    // The camera matrix is two by two, so undoing it is one division.
+    transform_x = (dir_y * rel_x - dir_x * rel_y) / determinant;
+    transform_y = (plane_x * rel_y - plane_y * rel_x) / determinant;
+    if transform_y <= 0.15 { continue; }
+
+    screen_x = WIDTH / 2.0 * (1.0 + transform_x / transform_y);
+    size = HEIGHT / transform_y * 0.4;
+    // A gentle rise and fall, so a core reads as hovering.
+    bob = sin(frame * 0.06 + which) * size * 0.09;
+    top = HEIGHT / 2.0 - size / 2.0 + bob;
+
+    left = round(screen_x - size / 2.0);
+    right = round(screen_x + size / 2.0);
+    edge = size * 0.2;
+
+    slice = left;
+    while (slice < right) {
+      if slice >= 0 && slice < WIDTH {
+        // Behind a wall? The depth of this column decides.
+        column = round(floor(slice / STEP));
+        if column >= 0 && column < len(depth) && depth[column] > transform_y {
+          colour = 5628159;
+          if slice - left < edge || right - slice < edge { colour = 12648447; }
+          push(slices, slice);
+          push(slices, round(top));
+          push(slices, 2);
+          push(slices, round(size));
+          push(slices, colour);
+        }
+      }
+      slice = slice + 2;
+    }
+  }
+
+  draw.rects(slices);
+}
+
+fun far_to_near() {
+  order = [];
+  distances = [];
+  which = 0;
+  while (which < len(core_x)) {
+    dx = core_x[which] - px;
+    dy = core_y[which] - py;
+    d = dx * dx + dy * dy;
+    at = 0;
+    while (at < len(order) && distances[at] > d) { at = at + 1; }
+    insert(order, at, which);
+    insert(distances, at, d);
+    which = which + 1;
+  }
+  return order;
+}
+
+MINI = 5;
+
+fun draw_minimap() {
+  tiles = [];
+  y = 0;
+  while (y < MAP_H) {
+    x = 0;
+    while (x < MAP_W) {
+      value = cell(x, y);
+      if value != 0 {
+        push(tiles, 8 + x * MINI);
+        push(tiles, 8 + y * MINI);
+        push(tiles, MINI - 1);
+        push(tiles, MINI - 1);
+        push(tiles, 4737096);
+      }
+      x = x + 1;
+    }
+    y = y + 1;
+  }
+
+  // The cores still out there.
+  which = 0;
+  while (which < len(core_x)) {
+    if core_alive[which] == 1 {
+      push(tiles, round(8 + core_x[which] * MINI) - 1);
+      push(tiles, round(8 + core_y[which] * MINI) - 1);
+      push(tiles, 3);
+      push(tiles, 3);
+      push(tiles, 5628159);
+    }
+    which = which + 1;
+  }
+
+  // The player, and a short line for where they are looking.
+  push(tiles, round(8 + px * MINI) - 1);
+  push(tiles, round(8 + py * MINI) - 1);
+  push(tiles, 3);
+  push(tiles, 3);
+  push(tiles, 16755370);
+  draw.rects(tiles);
+
+  draw.lines([8 + px * MINI, 8 + py * MINI,
+              8 + (px + cos(angle) * 2.5) * MINI, 8 + (py + sin(angle) * 2.5) * MINI,
+              1, 16755370]);
+}
+
+// Sixteen bands above the horizon and sixteen below, each a shade apart. Two
+// flat rectangles read as a backdrop; a gradient reads as distance.
+fun paint_backdrop() {
+  bands = [];
+  half = HEIGHT / 2;
+  band = 0;
+  while (band < 16) {
+    height = half / 16;
+    // Sky: darkest overhead, lifting towards the horizon.
+    t = band / 15.0;
+    push(bands, 0);
+    push(bands, round(band * height));
+    push(bands, WIDTH);
+    push(bands, round(height) + 1);
+    push(bands, mix(18, 22, 34, 52, 66, 96, t));
+    // Floor: brightest at the horizon, falling away underfoot.
+    push(bands, 0);
+    push(bands, round(half + band * height));
+    push(bands, WIDTH);
+    push(bands, round(height) + 1);
+    push(bands, mix(44, 48, 58, 16, 18, 22, t));
+    band = band + 1;
+  }
+  draw.rects(bands);
+}
+
+fun mix(r1, g1, b1, r2, g2, b2, t) {
+  r = round(r1 + (r2 - r1) * t);
+  g = round(g1 + (g2 - g1) * t);
+  b = round(b1 + (b2 - b1) * t);
+  return r * 65536 + g * 256 + b;
+}
+
+fun paint() {
+  paint_backdrop();
+  cast_walls();
+  draw_cores();
+  draw_minimap();
+
+  draw.text(WIDTH - 250, 12, message, 16, "#c9d1d9");
+  draw.text(WIDTH - 250, 34, "cores " @ collected @ "/" @ len(core_x), 14, "#7d8da5");
+  draw.text(8, HEIGHT - 24, "ZQSD or arrows, mouse to look, shift to run", 13, "#4c5a72");
+}
+
+// The first empty cell from the top left, with its four neighbours also empty,
+// so the player starts in a room rather than wedged in a doorway.
+fun find_spawn() {
+  y = 1;
+  while (y < MAP_H - 1) {
+    x = 1;
+    while (x < MAP_W - 1) {
+      if !is_solid(x, y) && !is_solid(x + 1, y) && !is_solid(x, y + 1) && !is_solid(x - 1, y) {
+        px = x + 0.5;
+        py = y + 0.5;
+        return none;
+      }
+      x = x + 1;
+    }
+    y = y + 1;
+  }
+  // A map with nowhere to stand is a mistake worth saying out loud.
+  assert(false);
+}
+
+fun main() {
+  build_world();
+  place_cores();
+  find_spawn();
+}
+
+main();
+
+Window("Suchu raycaster", 760px, 540px) {
+  background: #05070c;
+  layout: column;
+  padding: 10px;
+  spacing: 6px;
+
+  Label {
+    id: "title";
+    text: "raycaster - a 2D grid, one column at a time";
+    color: #7d8da5;
+    font-size: 13px;
+  }
+
+  Canvas {
+    id: "view";
+    width: 720px;
+    height: 430px;
+    background: #05070c;
+    onDraw: { paint(); };
+  }
+
+  Timer {
+    interval: 16ms;
+    onTick: {
+      update();
+      // event_value carries the wall clock, so the rate can be measured rather
+      // than hoped for.
+      if started == 0.0 { started = event_value; }
+      elapsed = event_value - started;
+      if elapsed > 1.0 {
+        rate = round(frame / elapsed);
+        set_text(title, "raycaster - " @ rate @ " frames a second, " @ round(WIDTH / STEP) @ " rays each");
+      }
+    };
+  }
+
+  // Escape closes the window on its own: raylib treats it as a close request.
+}

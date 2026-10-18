@@ -1,0 +1,64 @@
+// Les elements ajoutes pour la parite avec le backend Bogue :
+// Text, Checkbox, Slider, Box, Spacer, Shortcut.
+// Appuie sur Ctrl+R pour tester le raccourci.
+
+Window("Suchu - parity", 640px, 560px) {
+  background: #0f172a;
+  layout: column;
+  padding: 24px;
+  spacing: 16px;
+
+  Text {
+    width: 560px;
+    font-size: 16px;
+    color: #94a3b8;
+    text: "Text met le texte a la ligne tout seul quand une largeur est donnee, ce qu'un Label ne fait pas : il reste sur une seule ligne quoi qu'il arrive.";
+  }
+
+  Row {
+    spacing: 14px;
+
+    Box { width: 60px; height: 60px; background: #3b82f6; border-radius: 12px; }
+    Box { width: 60px; height: 60px; background: #22c55e; border-radius: 30px; }
+    Spacer { width: 40px; height: 10px; }
+    Box { width: 60px; height: 60px; background: #f59e0b; }
+  }
+
+  Checkbox {
+    id: "accept";
+    text: "Cocher cette case";
+    onChange: {
+      set_text(state, "Case : " @ event_value);
+    };
+  }
+
+  Label { id: "state"; text: "Case : false"; font-size: 16px; color: #7dd3fc; }
+
+  Label { text: "Volume :"; font-size: 15px; color: #94a3b8; }
+
+  Slider {
+    id: "volume";
+    width: 320px;
+    max: 100;
+    value: 35;
+    step: 5;
+    onChange: {
+      set_text(level, "Volume : " @ event_value);
+    };
+  }
+
+  Label { id: "level"; text: "Volume : 35"; font-size: 16px; color: #7dd3fc; }
+
+  Shortcut {
+    key: "Ctrl+R";
+    onClick: {
+      set_state(accept, true);
+      set_value(volume, 100);
+      set_text(state, "Case : true");
+      set_text(level, "Volume : 100");
+      set_text(hint, "Ctrl+R recu.");
+    };
+  }
+
+  Label { id: "hint"; text: "Appuie sur Ctrl+R"; font-size: 14px; color: #64748b; }
+}

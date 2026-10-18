@@ -1,0 +1,11 @@
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.S text eol=lf
+*.ml text eol=lf
+*.suchu text eol=lf
+*.ttf -text
+*.png -text
+*.driver -text

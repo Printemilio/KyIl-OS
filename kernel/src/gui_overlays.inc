@@ -26,11 +26,11 @@ static const char *switch_target_label(gui_switch_target_t target) {
     case GUI_SWITCH_TARGET_TERMINAL:
         return "Terminal";
     case GUI_SWITCH_TARGET_FILES:
-        return "Fichiers";
+        return "GFM";
     case GUI_SWITCH_TARGET_EDITOR:
-        return "Editeur";
+        return "Editor";
     case GUI_SWITCH_TARGET_BROWSER:
-        return "Navigateur";
+        return "Browser";
     case GUI_SWITCH_TARGET_PAINT:
         return "VexPaint";
     default:
@@ -42,7 +42,7 @@ static gui_switch_target_t current_switch_target(void) {
     if (paint_active && !paint_minimized) {
         return GUI_SWITCH_TARGET_PAINT;
     }
-    if (browser_active && !browser_minimized) {
+    if (browser_active && !browser_minimized && browser_window_focused) {
         return GUI_SWITCH_TARGET_BROWSER;
     }
     if (file_manager_opened && active_pid == file_manager_pid_value) {
@@ -57,25 +57,40 @@ static gui_switch_target_t current_switch_target(void) {
     return GUI_SWITCH_TARGET_NONE;
 }
 
+static void app_switcher_add_target(gui_switch_target_t target) {
+    if (target == GUI_SWITCH_TARGET_NONE || app_switcher_count >= GUI_APP_SWITCHER_MAX) {
+        return;
+    }
+
+    for (uint8_t i = 0u; i < app_switcher_count; ++i) {
+        if (app_switcher_targets[i] == target) {
+            return;
+        }
+    }
+
+    app_switcher_targets[app_switcher_count++] = target;
+}
+
 static void app_switcher_collect(void) {
     const gui_switch_target_t current = current_switch_target();
 
     app_switcher_count = 0u;
 
-    if (current == GUI_SWITCH_TARGET_TERMINAL && terminal_pid_value != 0u) {
-        app_switcher_targets[app_switcher_count++] = GUI_SWITCH_TARGET_TERMINAL;
+    app_switcher_add_target(current);
+    if (terminal_pid_value != 0u) {
+        app_switcher_add_target(GUI_SWITCH_TARGET_TERMINAL);
     }
-    if (file_manager_opened && file_manager_pid_value != 0u && app_switcher_count < GUI_APP_SWITCHER_MAX) {
-        app_switcher_targets[app_switcher_count++] = GUI_SWITCH_TARGET_FILES;
+    if (file_manager_opened && file_manager_pid_value != 0u) {
+        app_switcher_add_target(GUI_SWITCH_TARGET_FILES);
     }
-    if (editor_opened && editor_pid_value != 0u && app_switcher_count < GUI_APP_SWITCHER_MAX) {
-        app_switcher_targets[app_switcher_count++] = GUI_SWITCH_TARGET_EDITOR;
+    if (editor_opened && editor_pid_value != 0u) {
+        app_switcher_add_target(GUI_SWITCH_TARGET_EDITOR);
     }
-    if (browser_active && app_switcher_count < GUI_APP_SWITCHER_MAX) {
-        app_switcher_targets[app_switcher_count++] = GUI_SWITCH_TARGET_BROWSER;
+    if (browser_active) {
+        app_switcher_add_target(GUI_SWITCH_TARGET_BROWSER);
     }
-    if (paint_active && app_switcher_count < GUI_APP_SWITCHER_MAX) {
-        app_switcher_targets[app_switcher_count++] = GUI_SWITCH_TARGET_PAINT;
+    if (paint_active) {
+        app_switcher_add_target(GUI_SWITCH_TARGET_PAINT);
     }
 }
 
@@ -93,6 +108,7 @@ static void app_switcher_apply(gui_switch_target_t target) {
     case GUI_SWITCH_TARGET_BROWSER:
         if (browser_active) {
             browser_minimized = 0u;
+            browser_window_focused=1u;keyboard_focus_capture_current();
             if (paint_active) {
                 paint_minimized = 1u;
                 paint_drawing = 0u;
@@ -210,6 +226,25 @@ static void draw_app_switcher_overlay(void) {
         return;
     }
 
+    if (vex_lvgl_ui_ready()) {
+        const char *labels[GUI_APP_SWITCHER_MAX];
+
+        now = irq_timer_ticks();
+        elapsed = now > app_switcher_anim_start_tick ? now - app_switcher_anim_start_tick : 0u;
+        if (elapsed < GUI_APP_SWITCHER_ANIM_TICKS) {
+            offset_y = GUI_APP_SWITCHER_ANIM_TICKS - elapsed;
+            app_switcher_anim_step = (uint8_t)elapsed;
+        } else {
+            app_switcher_anim_step = (uint8_t)GUI_APP_SWITCHER_ANIM_TICKS;
+        }
+        for (uint8_t i = 0u; i < app_switcher_count; ++i) {
+            labels[i] = switch_target_label(app_switcher_targets[i]);
+        }
+        vex_lvgl_ui_draw_app_switcher(labels, app_switcher_count,
+            app_switcher_selected, (int32_t)offset_y);
+        return;
+    }
+
     now = irq_timer_ticks();
     elapsed = now > app_switcher_anim_start_tick ? now - app_switcher_anim_start_tick : 0u;
     if (elapsed < GUI_APP_SWITCHER_ANIM_TICKS) {
@@ -252,46 +287,47 @@ static void draw_app_switcher_overlay(void) {
 
 static void draw_context_menu(void) {
     const uint32_t menu   = pack_color(20, 18, 32);
-    const uint32_t menu_2 = pack_color(28, 26, 44);
     const uint32_t border = pack_color(48, 44, 72);
     const uint32_t sep    = pack_color(34, 30, 52);
     const uint32_t text   = pack_color(212, 206, 236);
-    const uint32_t muted  = pack_color(108, 100, 138);
     const uint32_t accent = pack_color(92, 82, 148);
     const uint64_t menu_w = GUI_CONTEXT_MENU_WIDTH;
     const uint64_t menu_h = GUI_CONTEXT_MENU_HEIGHT;
-    uint64_t x = cursor_x;
-    uint64_t y = cursor_y;
-    static const char *labels[] = { "Terminal", "Fichiers", "Navigateur", "Spotlight", "VexPaint", "A propos" };
-    static const char *hints[] = { "shell", "fichiers", "web", "chercher", "dessin", "VexOS" };
+    const uint64_t x = context_menu_x;
+    const uint64_t y = context_menu_y;
+    static const char *labels[] = { "Terminal", "Files", "Browser", "Paint", "Editor", "Shutdown", "Reboot" };
 
-    if (x + menu_w >= gui_framebuffer->width) {
-        x = gui_framebuffer->width - menu_w;
+    if (vex_lvgl_ui_ready()) {
+        vex_lvgl_ui_draw_context_menu((uint32_t)x, (uint32_t)y,
+            labels, NULL, 7u);
+        context_menu_visible = 1;
+        return;
     }
-    if (y + menu_h >= gui_framebuffer->height) {
-        y = gui_framebuffer->height - menu_h;
-    }
+    fill_rounded_rect(x, y, menu_w, menu_h, 7u, border);
+    fill_rounded_rect(x + 1u, y + 1u, menu_w - 2u, menu_h - 2u, 6u, menu);
 
-    context_menu_x = x;
-    context_menu_y = y;
-    fill_rounded_rect(x, y, menu_w, menu_h, 14u, border);
-    fill_rounded_rect(x + 1u, y + 1u, menu_w - 2u, menu_h - 2u, 13u, menu);
-    fill_rect(x + 14u, y + 1u, menu_w > 28u ? menu_w - 28u : menu_w, 1u, pack_color(58, 52, 86));
-    fill_rounded_rect(x + 8u, y + 8u, menu_w - 16u, 28u, 9u, menu_2);
-    tty_draw_text_transparent_at(x + 18u, y + 18u, "VexOS", text);
-    tty_draw_text_transparent_at(x + menu_w - 62u, y + 18u, "Menu", muted);
-
-    for (int i = 0; i < 6; ++i) {
-        const uint64_t row_y = y + 44u + (uint64_t)i * GUI_CONTEXT_MENU_ROW_HEIGHT;
-        if (i == 3 || i == 4) {
+    for (int i = 0; i < 7; ++i) {
+        const uint64_t row_y = y + 8u + (uint64_t)i * GUI_CONTEXT_MENU_ROW_HEIGHT;
+        if (i == 1 || i == 3) {
             fill_rect(x + 14u, row_y - 4u, menu_w - 28u, 1u, sep);
         }
-        fill_rounded_rect(x + GUI_CONTEXT_MENU_PAD, row_y, menu_w - GUI_CONTEXT_MENU_PAD * 2u, GUI_CONTEXT_MENU_ROW_HEIGHT - 4u, 8u, menu);
-        draw_context_menu_icon(x + 16u, row_y + 3u, i, accent);
-        tty_draw_text_transparent_at(x + 48u, row_y + 6u, labels[i], text);
-        tty_draw_text_transparent_at(x + 132u, row_y + 6u, hints[i], muted);
+        fill_rounded_rect(x + GUI_CONTEXT_MENU_PAD, row_y,
+                          menu_w - GUI_CONTEXT_MENU_PAD * 2u,
+                          GUI_CONTEXT_MENU_ROW_HEIGHT, 0u, menu);
+        draw_context_menu_icon(x + 16u, row_y + 8u, i, accent);
+        tty_draw_text_transparent_at(x + 48u, row_y + 11u, labels[i], text);
     }
     context_menu_visible = 1;
+}
+
+static void open_context_menu(void) {
+    const uint64_t max_x = gui_framebuffer->width > GUI_CONTEXT_MENU_WIDTH
+        ? gui_framebuffer->width - GUI_CONTEXT_MENU_WIDTH : 0u;
+    const uint64_t max_y = gui_framebuffer->height > GUI_CONTEXT_MENU_HEIGHT
+        ? gui_framebuffer->height - GUI_CONTEXT_MENU_HEIGHT : 0u;
+    context_menu_x = cursor_x < max_x ? cursor_x : max_x;
+    context_menu_y = cursor_y < max_y ? cursor_y : max_y;
+    draw_context_menu();
 }
 
 static void hide_context_menu(void) {
@@ -303,6 +339,7 @@ static void hide_context_menu(void) {
     }
 
     context_menu_visible = 0;
+    vex_lvgl_ui_hide_context_menu();
     draw_wallpaper_rect(x > 4u ? x - 4u : 0u, y, GUI_CONTEXT_MENU_WIDTH + 12u, GUI_CONTEXT_MENU_HEIGHT + 12u);
     render_active_app();
     draw_taskbar_static();
@@ -318,13 +355,13 @@ static int context_menu_item_at(uint64_t x, uint64_t y) {
         return -1;
     }
 
-    if (y < context_menu_y + 44u) {
+    if (y < context_menu_y + 8u) {
         return -1;
     }
 
     {
-        const uint64_t item = (y - context_menu_y - 44u) / GUI_CONTEXT_MENU_ROW_HEIGHT;
-        if (item >= 6u) {
+        const uint64_t item = (y - context_menu_y - 8u) / GUI_CONTEXT_MENU_ROW_HEIGHT;
+        if (item >= 7u) {
             return -1;
         }
 

@@ -1,0 +1,107 @@
+// Lists, sets, records, ranges, indexing, the list and string methods, '++'
+// and 'Length'. Every element and every field is written by a call that prints,
+// so the order they are built in is visible and not merely assumed.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun loud(value) {
+  print("  building " @ value);
+  return value;
+}
+
+fun main() {
+  // Literals, and the order their elements are evaluated in.
+  print("list elements:");
+  numbers = [loud(1), loud(2), loud(3)];
+  show("  list = ", numbers);
+  show("len = ", len(numbers));
+  show("Length = ", Length.numbers);
+
+  print("set elements:");
+  unique = set {loud(1), loud(2), loud(2)};
+  show("  set = ", unique);
+  show("len = ", len(unique));
+
+  print("record fields:");
+  point = { x: loud(10); y: loud(20); };
+  show("  record = ", point);
+  show("point.x = ", point.x);
+  show("len = ", len(point));
+
+  // A later field of the same name overwrites rather than shadows.
+  twice = { a: 1; a: 2; };
+  show("duplicate field = ", twice);
+  show("len = ", len(twice));
+
+  // Ranges, counting both ways.
+  show("1..5 = ", 1..5);
+  show("5..1 = ", 5..1);
+  show("3..3 = ", 3..3);
+  show("len of 1..4 = ", len(1..4));
+
+  // Reading by index, including from the end of a string.
+  show("numbers[0] = ", numbers[0]);
+  show("numbers[2] = ", numbers[2]);
+  show("\"Suchu\"[1] = ", "Suchu"[1]);
+  show("record by key = ", point["y"]);
+
+  // Writing by index, and adding a field.
+  numbers[1] = 99;
+  show("after numbers[1] = 99: ", numbers);
+  point.y = 21;
+  show("after point.y = 21: ", point);
+  point.z = 30;
+  show("after adding point.z: ", point);
+
+  // A list is a reference, so two names see one list.
+  alias = numbers;
+  alias[0] = 7;
+  show("through the alias: ", numbers);
+
+  // List methods, all of which mutate in place and return the list.
+  items = [3, 1, 2];
+  items.sort();
+  show("sorted = ", items);
+  items.reverse();
+  show("reversed = ", items);
+  show("sum = ", items.sum());
+  show("popped = ", items.pop());
+  show("after pop = ", items);
+  items.clear();
+  show("cleared = ", items);
+
+  // String methods.
+  csv = "a,b,c";
+  show("split = ", csv.split(","));
+  show("join = ", "-".join(["x", "y"]));
+  show("replace = ", csv.replace(",", "/"));
+  show("startswith = ", csv.startswith("a"));
+  show("endswith = ", csv.endswith("z"));
+
+  // Sets combine with '|' and '&'.
+  left = set {1, 2, 3};
+  right = set {3, 4};
+  show("union = ", left | right);
+  show("intersection = ", left & right);
+  show("difference = ", left - right);
+
+  // '++' and '--' yield the value from before the step.
+  counter = 3;
+  show("counter++ returned ", counter++);
+  show("counter is now ", counter);
+  show("counter-- returned ", counter--);
+  show("counter is now ", counter);
+  scale = 1.5;
+  show("scale++ returned ", scale++);
+  show("scale is now ", scale);
+
+  // Nested containers.
+  grid = [[1, 2], [3, 4]];
+  show("grid[1][0] = ", grid[1][0]);
+  people = [{ name: "a"; }, { name: "b"; }];
+  show("people[1].name = ", people[1].name);
+}
+
+main();

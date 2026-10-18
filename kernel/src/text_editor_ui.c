@@ -157,7 +157,7 @@ static void set_status(const char *prefix, const char *value) {
 }
 
 static const char *display_path(void) {
-    return current_path[0] == '\0' ? "nouveau fichier" : current_path;
+    return current_path[0] == '\0' ? "new file" : current_path;
 }
 
 static int ensure_piece_capacity(size_t needed) {
@@ -726,22 +726,23 @@ static void configure_document_metadata(const char *path) {
     if (path != NULL && path[0] != '\0') {
         copy_string(current_path, sizeof(current_path), path);
         build_recovery_path(path);
-        copy_string(title_text, sizeof(title_text), "Editeur ");
+        copy_string(title_text, sizeof(title_text), "Editor ");
         append_string(title_text, sizeof(title_text), path_basename(path));
-        set_status("Edition ", path);
+        set_status("Editing ", path);
         return;
     }
 
-    build_recovery_path("nouveau.txt");
-    copy_string(title_text, sizeof(title_text), "Editeur nouveau.txt");
-    copy_string(status_text, sizeof(status_text), "Nouveau document");
+    build_recovery_path("new.txt");
+    copy_string(title_text, sizeof(title_text), "Editor new.txt");
+    copy_string(status_text, sizeof(status_text), "New document");
 }
 
 static void apply_recovery_log(void) {
+    ora_view_t fs_lease_0 __attribute__((cleanup(ora_view_release)))={0};
     void *data = NULL;
     size_t size = 0;
 
-    if (fs_read(recovery_path, &data, &size) != 0 || data == NULL || size < sizeof(editor_recovery_header_t)) {
+    if (fs_read_view(recovery_path,&data,&size, &fs_lease_0) != 0 || data == NULL || size < sizeof(editor_recovery_header_t)) {
         return;
     }
 
@@ -787,7 +788,7 @@ static void apply_recovery_log(void) {
             cursor += insert_length;
         }
 
-        set_status("Recovery chargee ", recovery_path);
+        set_status("Recovery loaded ", recovery_path);
     }
 }
 
@@ -796,14 +797,14 @@ static int write_current_document(void) {
     char *buffer;
 
     if (current_path[0] == '\0') {
-        copy_string(status_text, sizeof(status_text), "Save As requis");
+        copy_string(status_text, sizeof(status_text), "Save As required");
         return -1;
     }
 
     flush_gap_to_piece_table();
     buffer = materialize_piece_table(&length);
     if (buffer == NULL) {
-        set_status("Erreur memoire ", display_path());
+        set_status("Memory error ", display_path());
         return -1;
     }
 
@@ -811,12 +812,12 @@ static int write_current_document(void) {
         static char newline = '\n';
         if (fs_write(current_path, &newline, 1u) != 0) {
             kfree(buffer);
-            set_status("Erreur save ", display_path());
+            set_status("Save error ", display_path());
             return -1;
         }
     } else if (fs_write(current_path, buffer, length) != 0) {
         kfree(buffer);
-        set_status("Erreur save ", display_path());
+        set_status("Save error ", display_path());
         return -1;
     }
 
@@ -827,11 +828,12 @@ static int write_current_document(void) {
     if (fs_exists(recovery_path)) {
         (void)fs_delete(recovery_path);
     }
-    set_status("Sauvegarde ", display_path());
+    set_status("Saved ", display_path());
     return 0;
 }
 
 static void open_document_internal(const char *path) {
+    ora_view_t fs_lease_1 __attribute__((cleanup(ora_view_release)))={0};
     void *data = NULL;
     size_t size = 0;
 
@@ -840,7 +842,7 @@ static void open_document_internal(const char *path) {
     configure_document_metadata(path);
 
     if (path != NULL && path[0] != '\0' &&
-            fs_read(path, &data, &size) == 0 && data != NULL && size > 0u) {
+            fs_read_view(path,&data,&size, &fs_lease_1) == 0 && data != NULL && size > 0u) {
         original_buffer = kmalloc(size);
         if (original_buffer != NULL) {
             for (size_t i = 0; i < size; ++i) {
@@ -864,7 +866,7 @@ static void begin_save_prompt(void) {
         copy_string(save_prompt_path, sizeof(save_prompt_path), current_path);
     } else {
         (void)mkdir("/home/root/Desktop", 0u);
-        copy_string(save_prompt_path, sizeof(save_prompt_path), "nouveau.txt");
+        copy_string(save_prompt_path, sizeof(save_prompt_path), "new.txt");
     }
 }
 
@@ -873,7 +875,7 @@ static int confirm_save_prompt(void) {
     char previous_recovery[sizeof(recovery_path)];
 
     if (save_prompt_path[0] == '\0') {
-        copy_string(status_text, sizeof(status_text), "Chemin vide");
+        copy_string(status_text, sizeof(status_text), "Empty path");
         return 0;
     }
 
@@ -1084,7 +1086,7 @@ static void draw_editor_frame(uint64_t x, uint64_t y, uint64_t w, uint64_t h) {
     gui_fill_rect(x, y + EDITOR_TOPBAR_HEIGHT - 1u, w, 1u, line);
     gui_fill_rect(x, y + h - EDITOR_STATUS_HEIGHT, w, EDITOR_STATUS_HEIGHT, pane);
     gui_fill_rect(x, y + h - EDITOR_STATUS_HEIGHT, w, 1u, line);
-    tty_draw_text_clipped_at(x + 14u, y + 12u, w > 160u ? w - 160u : 8u, current_path[0] == '\0' ? "nouveau fichier" : current_path, text, pane);
+    tty_draw_text_clipped_at(x + 14u, y + 12u, w > 160u ? w - 160u : 8u, current_path[0] == '\0' ? "new file" : current_path, text, pane);
     tty_draw_text_clipped_at(x + w - 132u, y + 12u, 104u, "CTRL+S SAVE AS", muted, pane);
     if (save_prompt_active) {
         copy_string(status_line, sizeof(status_line), "Save as (Enter): ");
@@ -1196,7 +1198,7 @@ int text_editor_ui_handle_key(char key) {
     if (save_prompt_active) {
         if (key == 27) {
             save_prompt_active = 0u;
-            set_status("Edition ", display_path());
+            set_status("Editing ", display_path());
             return 1;
         }
         if (key == '\n') {
@@ -1271,7 +1273,7 @@ int text_editor_ui_is_open(void) {
 }
 
 const char *text_editor_ui_title(void) {
-    return title_text[0] == '\0' ? "Editeur" : title_text;
+    return title_text[0] == '\0' ? "Editor" : title_text;
 }
 
 static void text_editor_process_loop(void) {

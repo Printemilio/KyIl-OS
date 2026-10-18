@@ -1,0 +1,354 @@
+// KyIlOS native editor: all document state, commands, editing and UI are Suchu.
+import "editor_model.suchu";
+import platform;
+import textbytes;
+import files;
+import system;
+import draw;
+import keys;
+import mouse;
+import clipboard;
+import chrome;
+
+docs = []; selected = 0; next_id = 1; initialized = false;
+editor_focus = true; window_focus = true; drag_selection = false; last_buttons = 0;
+shift_down = false; show_numbers = true; search_open = false; notice = "";
+scroll_drag = 0; menu_open = "";
+modal = ""; modal_doc = none; pending_action = ""; overwrite_path = "";
+window_discards = []; exit_allowed = false; request_enter = false;
+cell = 10; row_height = 24; visible_rows = 20; visible_cols = 80;
+
+fun document() { return docs[selected]; }
+fun add_document(d) { d.id = next_id; next_id = next_id + 1; push(docs, d); selected = len(docs) - 1; editor_focus = true; blur(); chrome.invalidate(); }
+fun select_document(index) { selected = index; blur(); editor_focus = true; chrome.invalidate(); }
+fun toggle_menu(name) {
+  menu_open = if menu_open == name then "" else name;
+  set_visible(file_menu, menu_open == "file"); set_visible(edit_menu, menu_open == "edit"); set_visible(view_menu, menu_open == "view");
+}
+fun new_document() { if modal != "" { return; } add_document(editor_model.create("", "")); }
+fun open_file(path) {
+  for i in 0..(len(docs) - 1) { if docs[i].path == path { selected = i; notice = ""; return; } }
+  try { d = editor_model.read(path); add_document(d); notice = "Opened " @ path; }
+  else error { notice = error.message; }
+}
+fun dismiss_dialog() {
+  modal = ""; modal_doc = none; pending_action = ""; overwrite_path = "";
+  set_visible(dialog, false); blur(); editor_focus = true; request_enter = false;
+  set_enabled(commands, true); set_enabled(tabstrip, true); set_enabled(search_bar, true);
+  set_enabled(file_menu, true); set_enabled(edit_menu, true); set_enabled(view_menu, true);
+}
+fun dialog_for(kind, d, action) {
+  modal = kind; modal_doc = d; pending_action = action; editor_focus = false;
+  set_enabled(commands, false); set_enabled(tabstrip, false); set_enabled(search_bar, false);
+  set_enabled(file_menu, false); set_enabled(edit_menu, false); set_enabled(view_menu, false);
+  set_visible(dialog, true); set_visible(path_input, kind == "open" || kind == "save");
+  set_visible(discard_button, kind == "confirm");
+  set_text(confirm_button, if kind == "open" then "Open" else if kind == "overwrite" then "Replace" else "Save");
+  set_text(dialog_message, if kind == "confirm" then "Unsaved changes — save, discard, or cancel?" else if kind == "overwrite" then "This file exists. Replace it?" else if kind == "open" then "Open a UTF-8 text file (absolute path)" else "Save as (absolute path)");
+  if kind == "open" || kind == "save" {
+    set_text(path_input, if kind == "save" && d.path != "" then d.path else "/home/root/"); focus(path_input);
+  }
+}
+fun request_open() { if modal == "" { dialog_for("open", document(), ""); } }
+fun forgotten(id) { for x in window_discards { if x == id { return true; } } return false; }
+fun continue_window_close() {
+  for d in docs {
+    if editor_model.dirty(d) && !forgotten(d.id) { dialog_for("confirm", d, "window"); return; }
+  }
+  dismiss_dialog(); exit_allowed = true; chrome.close();
+}
+fun window_close() {
+  if exit_allowed { return true; }
+  if modal == "" { window_discards = []; continue_window_close(); }
+  return exit_allowed;
+}
+fun remove_document(d) {
+  i = 0; while i < len(docs) { if docs[i].id == d.id { remove(docs, i); break; } i = i + 1; }
+  if len(docs) == 0 { add_document(editor_model.create("", "")); }
+  selected = min(selected, len(docs) - 1); blur(); editor_focus = true; chrome.invalidate();
+}
+fun after_saved(d, action) {
+  dismiss_dialog();
+  if action == "tab" { remove_document(d); }
+  if action == "window" { continue_window_close(); }
+}
+fun save_to(d, path, action, confirmed) {
+  if path != d.path && files.exists(path) && !confirmed {
+    overwrite_path = path; dialog_for("overwrite", d, action); return;
+  }
+  try { editor_model.save(d, path); notice = "Saved " @ path; after_saved(d, action); }
+  else error { notice = error.message; }
+}
+fun save_document(as_new) {
+  if modal != "" { return; } d = document();
+  if as_new || d.path == "" { dialog_for("save", d, ""); }
+  else { save_to(d, d.path, "", false); }
+}
+fun close_tab(index) {
+  if modal != "" { return; } d = docs[index];
+  if editor_model.dirty(d) { dialog_for("confirm", d, "tab"); }
+  else { remove_document(d); }
+}
+fun confirm_dialog() {
+  kind = modal; d = modal_doc; action = pending_action;
+  if kind == "open" { path = get_text(path_input); dismiss_dialog(); open_file(path); }
+  if kind == "save" { save_to(d, get_text(path_input), action, false); }
+  if kind == "overwrite" { save_to(d, overwrite_path, action, true); }
+  if kind == "confirm" {
+    if d.path == "" { dialog_for("save", d, action); }
+    else { save_to(d, d.path, action, false); }
+  }
+}
+fun discard_dialog() {
+  if modal != "confirm" { return; } d = modal_doc; action = pending_action; dismiss_dialog();
+  if action == "tab" { remove_document(d); }
+  if action == "window" { push(window_discards, d.id); continue_window_close(); }
+}
+fun cancel_dialog() { window_discards = []; dismiss_dialog(); notice = "Cancelled; document retained"; }
+fun selection_text(d) { return editor_model.slice(d, min(d.state[3], d.state[4]), abs(d.state[3] - d.state[4])); }
+fun copy_selection(cut) {
+  d = document(); text = selection_text(d);
+  if text != "" { clipboard.write(text); if cut { editor_model.insert_text(d, ""); } }
+}
+fun paste() { editor_model.insert_text(document(), clipboard.read()); }
+fun search_next() {
+  q = get_text(find_input); d = document(); found = editor_model.find(d, q, d.state[3]);
+  if found < 0 { found = editor_model.find(d, q, 0); }
+  if found < 0 { notice = "Not found"; } else { d.state[4] = found; d.state[3] = found + len(q); notice = "Match selected"; }
+  ensure_visible(d);
+}
+fun replace_match() {
+  d = document(); q = get_text(find_input);
+  if q != "" && selection_text(d) == q { editor_model.insert_text(d, get_text(replace_input)); }
+  search_next();
+}
+fun replace_all() {
+  d = document(); q = get_text(find_input); replacement = get_text(replace_input);
+  if q == "" { return; } before = editor_model.snapshot(d); at = 0; count = 0;
+  found = editor_model.find(d, q, at);
+  while found >= 0 {
+    editor_model.replace(d, found, len(q), replacement, false); count = count + 1; at = found + len(replacement);
+    found = editor_model.find(d, q, at);
+  }
+  if count > 0 { editor_model.remember(d, before); }
+  notice = "Replaced " @ count @ " matches"; ensure_visible(d);
+}
+fun open_search() { if modal != "" { return; } search_open = !search_open; set_visible(search_bar, search_open); if search_open { editor_focus = false; focus(find_input); } else { blur(); editor_focus = true; } }
+fun ensure_visible(d) {
+  row = editor_model.line_at(d, d.state[3]); col = editor_model.column(d, d.state[3]);
+  if row < d.top { d.top = row; } if row >= d.top + visible_rows { d.top = row - visible_rows + 1; }
+  if col < d.horizontal { d.horizontal = col; } if col >= d.horizontal + visible_cols { d.horizontal = col - visible_cols + 1; }
+}
+fun move_cursor(d, target, shift) { d.state[3] = max(0, min(d.state[1], target)); if !shift { d.state[4] = d.state[3]; } ensure_visible(d); }
+fun vertical(d, rows, shift) {
+  if d.preferred < 0 { d.preferred = editor_model.column(d, d.state[3]); }
+  preferred = d.preferred; row = max(0, min(d.state[2] - 1, editor_model.line_at(d, d.state[3]) + rows));
+  move_cursor(d, editor_model.offset_at(d, row, preferred), shift); d.preferred = preferred;
+}
+fun indent(d, backwards) {
+  if d.state[3] == d.state[4] && !backwards { editor_model.insert_text(d, "\t"); return; }
+  first = editor_model.line_at(d, min(d.state[3], d.state[4])); last = editor_model.line_at(d, max(d.state[3], d.state[4]));
+  if d.state[3] != d.state[4] && max(d.state[3], d.state[4]) == editor_model.line_start(d, last) && last > first { last = last - 1; }
+  before = editor_model.snapshot(d); row = last;
+  while row >= first {
+    at = editor_model.line_start(d, row);
+    if backwards {
+      n = 0; while n < 4 && editor_model.slice(d, at + n, 1) == " " { n = n + 1; }
+      if editor_model.slice(d, at, 1) == "\t" { n = 1; }
+      if n > 0 { editor_model.replace(d, at, n, "", false); }
+    } else { editor_model.replace(d, at, 0, "\t", false); }
+    row = row - 1;
+  }
+  editor_model.remember(d, before); d.state[4] = editor_model.line_start(d, first); d.state[3] = editor_model.line_end(d, last);
+}
+fun key_event(key, hardware, ctrl, shift, alt) {
+  if modal != "" { if key == 10 { request_enter = true; } if key == 27 { cancel_dialog(); } return; }
+  d = document();
+  if ctrl {
+    if key == 110 || key == 78 { new_document(); return; }
+    if key == 111 || key == 79 { request_open(); return; }
+    if key == 115 || key == 83 { save_document(shift); return; }
+    if key == 119 || key == 87 { close_tab(selected); return; }
+    if key == 102 || key == 70 || key == 104 || key == 72 { open_search(); return; }
+    if hardware == 15 { select_document((selected + (if shift then len(docs) - 1 else 1)) % len(docs)); return; }
+  }
+  if !editor_focus { if key == 27 { set_visible(search_bar, false); search_open = false; blur(); editor_focus = true; } return; }
+  if ctrl {
+    if key == 97 || key == 65 { d.state[4] = 0; d.state[3] = d.state[1]; ensure_visible(d); return; }
+    if key == 99 || key == 67 { copy_selection(false); return; }
+    if key == 120 || key == 88 { copy_selection(true); ensure_visible(d); return; }
+    if key == 118 || key == 86 { paste(); ensure_visible(d); return; }
+    if key == 122 || key == 90 { if shift { editor_model.redo(d); } else { editor_model.undo(d); } ensure_visible(d); return; }
+    if key == 121 || key == 89 { editor_model.redo(d); ensure_visible(d); return; }
+  }
+  if hardware == 203 { target = if ctrl then editor_model.word_previous(d, d.state[3]) else editor_model.previous(d, d.state[3]); move_cursor(d, target, shift); d.preferred = -1; return; }
+  if hardware == 205 { target = if ctrl then editor_model.word_next(d, d.state[3]) else editor_model.next(d, d.state[3]); move_cursor(d, target, shift); d.preferred = -1; return; }
+  if hardware == 200 { vertical(d, -1, shift); return; } if hardware == 208 { vertical(d, 1, shift); return; }
+  if hardware == 201 { vertical(d, -visible_rows, shift); return; } if hardware == 209 { vertical(d, visible_rows, shift); return; }
+  if hardware == 199 { move_cursor(d, if ctrl then 0 else editor_model.line_start(d, editor_model.line_at(d, d.state[3])), shift); return; }
+  if hardware == 207 { move_cursor(d, if ctrl then d.state[1] else editor_model.line_end(d, editor_model.line_at(d, d.state[3])), shift); return; }
+  if key == 8 || hardware == 211 {
+    if d.state[3] != d.state[4] { editor_model.insert_text(d, ""); }
+    else if key == 8 && d.state[3] > 0 { at = if ctrl then editor_model.word_previous(d, d.state[3]) else editor_model.previous(d, d.state[3]); editor_model.replace(d, at, d.state[3] - at, "", true); }
+    else if hardware == 211 && d.state[3] < d.state[1] { end = if ctrl then editor_model.word_next(d, d.state[3]) else editor_model.next(d, d.state[3]); editor_model.replace(d, d.state[3], end - d.state[3], "", true); }
+    ensure_visible(d); return;
+  }
+  if key == 9 { indent(d, shift); ensure_visible(d); return; }
+  if key == 10 { editor_model.insert_text(d, d.eol); ensure_visible(d); return; }
+  if !ctrl && !alt && key >= 32 && key < 1114112 { editor_model.insert_text(d, textbytes.character(key)); ensure_visible(d); }
+}
+fun process_events(bounds) {
+  gutter = if show_numbers then 58 else 12;
+  for e in platform.events() {
+    if e[0] == 3 { ensure_visible(document()); }
+    if e[0] == 7 { window_focus = e[1] == 1; if !window_focus { drag_selection = false; scroll_drag = 0; shift_down = false; } }
+    if e[0] == 6 {
+      mods = round(floor(e[1] / 256)) % 256; shift_down = round(floor(mods / 2)) % 2 == 1;
+      if e[1] % 2 == 1 && window_focus { key_event(e[2], e[3], mods % 2 == 1, shift_down, round(floor(mods / 4)) % 2 == 1); }
+    }
+    if e[0] == 5 {
+      x = e[2] - bounds[0]; y = e[3] - bounds[1]; held = e[1] % 2 == 1;
+      inside = x >= 0 && y >= 0 && x < bounds[2] && y < bounds[3]; d = document();
+      if held && last_buttons % 2 == 0 {
+        drag_selection = inside && modal == "";
+        if drag_selection {
+          editor_focus = true; blur();
+          if x >= bounds[2] - 12 { scroll_drag = 1; drag_selection = false; }
+          else if y >= bounds[3] - 14 { scroll_drag = 2; drag_selection = false; }
+          else if !shift_down { d.state[4] = editor_model.offset_at(d, min(d.state[2] - 1, d.top + round(floor(max(0, y) / row_height))), max(0, d.horizontal + round(floor((x - gutter) / cell)))); }
+        } else if modal != "" || is_focused(find_input) || is_focused(replace_input) || is_focused(path_input) { editor_focus = false; }
+      }
+      if modal == "" && inside && e[4] != 0 {
+        if shift_down { d.horizontal = max(0, d.horizontal - e[4] * 4); }
+        else { d.top = max(0, min(max(0, d.state[2] - visible_rows), d.top - e[4] * 3)); }
+      }
+      if drag_selection && held && modal == "" {
+        row = max(0, min(d.state[2] - 1, d.top + round(floor(y / row_height))));
+        d.state[3] = editor_model.offset_at(d, row, max(0, d.horizontal + round(floor((x - gutter) / cell)))); ensure_visible(d);
+      }
+      if scroll_drag == 1 && held { d.top = max(0, min(max(0, d.state[2] - visible_rows), round(floor(y / max(1, bounds[3] - 14) * max(0, d.state[2] - visible_rows))))); }
+      if scroll_drag == 2 && held { limit = max(0, editor_model.column(d, editor_model.line_end(d, editor_model.line_at(d, d.state[3]))) - visible_cols); d.horizontal = max(0, min(limit, round(floor((x - gutter) / max(1, bounds[2] - gutter) * limit)))); }
+      if !held { drag_selection = false; scroll_drag = 0; } last_buttons = e[1];
+    }
+  }
+}
+fun draw_tabs() {
+  draw.clear(1710622); width = max(120, min(230, (draw.width() - 40) / max(1, len(docs))));
+  for i in 0..(len(docs) - 1) {
+    x = i * width; d = docs[i];
+    if i == selected { draw.rect(x, 0, width, 34, 3421239); draw.rect(x, 32, width, 2, 11176191); }
+    name = if d.path == "" then "Untitled " @ d.id else d.path.split("/")[len(d.path.split("/")) - 1];
+    at = 0; chars = 0; while at < len(name) && chars < 22 { at = textbytes.next(name, at); chars = chars + 1; }
+    if at < len(name) { name = textbytes.sub(name, 0, at) @ "…"; }
+    draw.text(x + 10, 8, (if editor_model.dirty(d) then "* " else "") @ name, 14, 15395562);
+    draw.text(x + width - 22, 8, "×", 15, 11182266);
+    b = get_bounds(tabstrip);
+    if modal == "" && mouse.pressed() && mouse.y() >= b[1] && mouse.y() < b[1] + b[3] && mouse.x() >= b[0] + x && mouse.x() < b[0] + x + width {
+      if mouse.x() >= b[0] + x + width - 28 { close_tab(i); return; }
+      select_document(i);
+    }
+  }
+}
+fun draw_document() {
+  if !initialized {
+    new_document(); path = platform.context(2); args = system.args();
+    if len(args) > 0 { path = args[0]; } if path != "" { open_file(path); if len(docs) > 1 { remove(docs, 0); selected = 0; } }
+    initialized = true;
+  }
+  draw.font("mono"); cell = draw.measure("M", 18); b = get_bounds(viewport);
+  visible_rows = max(1, round(floor((b[3] - 14) / row_height))); gutter = if show_numbers then 58 else 12;
+  visible_cols = max(1, round(floor((b[2] - gutter - 12) / cell)));
+  process_events(b); d = document(); draw.clear(1184276);
+  if show_numbers { draw.rect(0, 0, 48, b[3], 1579290); }
+  row = d.top; y = 0; low = min(d.state[3], d.state[4]); high = max(d.state[3], d.state[4]); view_cache = [];
+  while row < d.state[2] && y < b[3] - 14 {
+    if show_numbers { draw.text(8, y + 3, "" @ (row + 1), 14, 8948622); }
+    start = editor_model.clipped_start(d, row, d.horizontal); push(view_cache, start);
+    at = start[1]; col = start[2]; end = editor_model.line_end(d, row); rendered = "";
+    if editor_model.line_at(d, d.state[3]) == row { draw.rect(gutter, y, b[2] - gutter, row_height, 1776931); }
+    while at < end && col < d.horizontal + visible_cols {
+      next = editor_model.next(d, at); glyph = editor_model.slice(d, at, next - at);
+      after = if glyph == "\t" then (round(floor(col / 4)) + 1) * 4 else col + 1;
+      left = max(col, d.horizontal); right = min(after, d.horizontal + visible_cols);
+      if right > left {
+        if at < high && next > low { draw.rect(gutter + (left - d.horizontal) * cell, y, (right - left) * cell, row_height, 4730729); }
+        if glyph == "\t" { j = left; while j < right { rendered = rendered @ " "; j = j + 1; } }
+        else { rendered = rendered @ glyph; }
+      }
+      col = after; at = next;
+    }
+    draw.text(gutter, y + 2, rendered, 18, 15395562);
+    if editor_focus && window_focus && editor_model.line_at(d, d.state[3]) == row {
+      caret_col = editor_model.column(d, d.state[3]) - d.horizontal;
+      if caret_col >= 0 && caret_col < visible_cols { draw.rect(gutter + caret_col * cell, y + 2, 2, 20, 12157695); }
+    }
+    // Include the selected newline in a continuous multi-line range.
+    if end >= low && end < high { draw.rect(gutter + max(0, col - d.horizontal) * cell, y, cell, row_height, 4730729); }
+    row = row + 1; y = y + row_height;
+  }
+  d.view_cache = view_cache; d.state[7] = d.state[1] + 1;
+  thumb = min(b[3] - 14, max(12, visible_rows / max(1, d.state[2]) * (b[3] - 14)));
+  draw.rect(b[2] - 8, d.top / max(1, d.state[2] - visible_rows) * (b[3] - 14 - thumb), 6, thumb, 6381921);
+  draw.rect(gutter, b[3] - 8, min(b[2] - gutter, visible_cols * cell), 3, 3421239);
+  set_text(status, "Ln " @ (editor_model.line_at(d, d.state[3]) + 1) @ ", Col " @ (editor_model.column(d, d.state[3]) + 1) @ "   " @ (if editor_model.dirty(d) then "Modified" else if d.path == "" then "Unmodified" else "Saved") @ "   UTF-8 / " @ (if d.eol == "\r\n" then "CRLF" else "LF") @ "   Clipboard: local   " @ notice);
+  if request_enter { request_enter = false; confirm_dialog(); }
+}
+
+platform.install(true);
+chrome.on_close(window_close);
+Window("KyIl Editor", 1000px, 680px) {
+  background: #121214; layout: column; padding: 0px; spacing: 0px; exit-key: "none";
+  Row {
+    id: "commands"; width: fill; height: 40px; padding: 5px; spacing: 5px; background: #202024; color: #eeeeee;
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "File"; onClick: { toggle_menu("file"); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Edit"; onClick: { toggle_menu("edit"); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "View"; onClick: { toggle_menu("view"); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "New"; onClick: { new_document(); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Open…"; onClick: { request_open(); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Save"; onClick: { save_document(false); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Undo"; onClick: { if modal == "" { editor_model.undo(document()); ensure_visible(document()); } }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Redo"; onClick: { if modal == "" { editor_model.redo(document()); ensure_visible(document()); } }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Find / replace"; onClick: { open_search(); }; }
+  }
+  Row { id: "file_menu"; width: fill; height: 36px; spacing: 6px; padding: 4px; visible: false; background: #30243b;
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "New"; onClick: { toggle_menu(""); new_document(); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Open…"; onClick: { toggle_menu(""); request_open(); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Save"; onClick: { toggle_menu(""); save_document(false); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Save as…"; onClick: { toggle_menu(""); save_document(true); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Close document"; onClick: { toggle_menu(""); close_tab(selected); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Exit"; onClick: { toggle_menu(""); chrome.close(); }; }
+  }
+  Row { id: "edit_menu"; width: fill; height: 36px; spacing: 6px; padding: 4px; visible: false; background: #30243b;
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Copy"; onClick: { copy_selection(false); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Cut"; onClick: { copy_selection(true); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Paste"; onClick: { paste(); ensure_visible(document()); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Select all"; onClick: { d = document(); d.state[4] = 0; d.state[3] = d.state[1]; editor_focus = true; }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Find / replace"; onClick: { toggle_menu(""); open_search(); }; }
+  }
+  Row { id: "view_menu"; width: fill; height: 36px; spacing: 6px; padding: 4px; visible: false; background: #30243b;
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Line numbers"; onClick: { show_numbers = !show_numbers; toggle_menu(""); }; }
+    Label { text: "UTF-8  ·  Tab width: 4  ·  LF/CRLF preserved"; color: #eeeeee; }
+  }
+  Canvas { id: "tabstrip"; width: fill; height: 34px; onDraw: { if initialized { draw_tabs(); } }; }
+  Row {
+    id: "search_bar"; width: fill; height: 40px; padding: 5px; spacing: 5px; visible: false;
+    Input { id: "find_input"; width: fill; placeholder: "Find"; }
+    Input { id: "replace_input"; width: fill; placeholder: "Replace with"; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Next"; onClick: { search_next(); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Replace"; onClick: { replace_match(); }; }
+    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "All"; onClick: { replace_all(); }; }
+  }
+  Canvas { id: "viewport"; width: fill; height: fill; onDraw: { draw_document(); }; }
+  Column {
+    id: "dialog"; width: fill; height: 122px; padding: 10px; spacing: 6px; visible: false; background: #30243b;
+    Label { id: "dialog_message"; text: ""; color: #eeeeee; }
+    Input { id: "path_input"; width: fill; height: 30px; background: #202024; color: #eeeeee; }
+    Row {
+      spacing: 8px;
+      Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; id: "confirm_button"; text: "Save"; onClick: { confirm_dialog(); }; }
+      Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; id: "discard_button"; text: "Discard"; onClick: { discard_dialog(); }; }
+      Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Cancel"; onClick: { cancel_dialog(); }; }
+    }
+  }
+  Label { id: "status"; width: fill; height: 26px; font-size: 12px; padding: 5px; color: #bdb3ce; background: #202024; text: "Starting…"; }
+}

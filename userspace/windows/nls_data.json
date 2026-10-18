@@ -1,0 +1,11 @@
+{
+  "source": "Public Windows NLS function results; data only, no DLL/code included",
+  "host": "sys.getwindowsversion(major=10, minor=0, build=26300, platform=2, service_pack='')",
+  "locales": [
+    "invariant",
+    "en-US"
+  ],
+  "ctype": "BMP CT_CTYPE1/2/3, per UTF-16 code unit",
+  "case": "invariant simple BMP upper/lower",
+  "sha256": "a5333e7e6cb69a09abb17ace93ca98dfb37ff2b8f4006253257fce7b8e4367c3"
+}

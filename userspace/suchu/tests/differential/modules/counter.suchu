@@ -1,0 +1,14 @@
+// A module with mutable top-level state, read and written from outside. Its own
+// functions and an importer have to see one binding, not two.
+
+count = 0;
+label = "counter";
+
+fun bump() {
+  count = count + 1;
+  return count;
+}
+
+fun describe() {
+  return label @ " is at " @ count;
+}

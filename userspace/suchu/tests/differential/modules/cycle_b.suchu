@@ -1,0 +1,2 @@
+import "cycle_a.suchu";
+value = 2;

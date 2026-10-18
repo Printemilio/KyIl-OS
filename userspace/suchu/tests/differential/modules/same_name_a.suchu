@@ -1,0 +1,4 @@
+// Defines names that same_name_b.suchu defines too, with different shapes.
+fun helper() { return "a's helper, no arguments"; }
+label = "a";
+fun describe() { return label; }

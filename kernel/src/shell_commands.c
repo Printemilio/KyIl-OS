@@ -1,15 +1,25 @@
 #include <unos/shell.h>
+#include <unos/kernel_mapping_stats.h>
+#include <unos/vmm.h>
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <unos/browser_downloads.h>
 #include <unos/clipboard.h>
 #include <unos/debug_log.h>
 #include <unos/disk.h>
 #include <unos/dns.h>
 #include <unos/dhcp.h>
 #include <unos/elf.h>
+#include <unos/fd_usage.h>
+#include <unos/profiler.h>
 #include <unos/ethernet.h>
 #include <unos/fs.h>
+#include <unos/power.h>
+#include <unos/compat.h>
+#include <unos/profiler.h>
 #include <unos/gpu.h>
 #include <unos/gui.h>
 #include <unos/heap.h>
@@ -17,10 +27,14 @@
 #include <unos/ipc.h>
 #include <unos/ipv4.h>
 #include <unos/netdev.h>
+#include <unos/pmm.h>
+#include <unos/security.h>
 #include <unos/scheduler.h>
+#include <unos/smp.h>
 #include <unos/spotlight.h>
 #include <unos/tls.h>
 #include <unos/tty.h>
+#include <unos/driver_manager.h>
 #include <unos/users.h>
 #include <unos/vex_abi.h>
 #include <unos/vex_syscall.h>
@@ -30,10 +44,57 @@
 #define SHELL_PATH_SIZE 128u
 #define SHELL_MAX_ARGS 8u
 #define SHELL_ARG_SIZE 64u
+#define SHELL_RUN_LINE 512u
+#define SHELL_RUN_MAX_ARGS 16u
 #define SHELL_LOG_BUFFER_SIZE 2048u
 
 static uint8_t shell_ls_show_hidden;
+void kernel_mapping_stats_report(int reset) {
+    kernel_mapping_stats_t s;
+    char line[512];
+    vmm_kernel_mapping_stats_snapshot(&s, reset);
+    const struct { const char *name; uint64_t value; } fields[] = {
+        {"map", s.map_calls}, {"unmap", s.unmap_calls}, {"tasks", s.task_visits},
+        {"distinct", s.distinct_spaces}, {"duplicate_cr3", s.duplicate_cr3},
+        {"sync", s.sync_calls}, {"checked", s.root_slots_checked},
+        {"stores", s.root_stores}, {"changes", s.root_changes},
+        {"leaf_map", s.leaf_maps}, {"leaf_unmap", s.leaf_unmaps},
+        {"publications", s.root_publications}, {"registered", s.registered_spaces}
+    };
+    char *cursor = line;
+    const char *prefix = reset ? "kmap-stats reset:" : "kmap-stats:";
+    while (*prefix) *cursor++ = *prefix++;
+    for (size_t i = 0u; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+        char digits[20]; size_t count = 0u; uint64_t value = fields[i].value;
+        const char *name = fields[i].name;
+        *cursor++ = ' ';
+        while (*name) *cursor++ = *name++;
+        *cursor++ = '=';
+        do { digits[count++] = (char)('0' + value % 10u); value /= 10u; } while (value);
+        while (count) *cursor++ = digits[--count];
+    }
+    *cursor++ = '\n'; *cursor = '\0';
+    tty_puts(line);
+    debug_log_puts(line);
+}
 static char shell_log_buffer[SHELL_LOG_BUFFER_SIZE];
+#define SHELL_TOP_MAX_TASKS 128u
+typedef struct shell_top_task_sample {
+    uint32_t tid;
+    uint32_t process_id;
+    uint64_t cpu_ticks;
+} shell_top_task_sample_t;
+typedef struct shell_top_group_row {
+    uint32_t process_id;
+    uint32_t parent_pid;
+    uint32_t hottest_tid;
+    uint32_t thread_count;
+    uint64_t cpu_ticks;
+    uint64_t hottest_ticks;
+    char name[SCHEDULER_TASK_NAME_SIZE];
+} shell_top_group_row_t;
+static shell_top_task_sample_t shell_top_before[SHELL_TOP_MAX_TASKS];
+static shell_top_group_row_t shell_top_groups[SHELL_TOP_MAX_TASKS];
 
 static void halt_forever(void) {
     for (;;) {
@@ -73,7 +134,7 @@ static int starts_with_word(const char *line, const char *word) {
         }
     }
 
-    return line[word_len] == '\0' || line[word_len] == ' ';
+    return line[word_len] == '\0' || line[word_len] <= ' ';
 }
 
 static const char *argument_after_word(const char *line) {
@@ -153,6 +214,23 @@ static void print_kib(uint64_t bytes) {
     tty_puts(" KiB");
 }
 
+static void print_percent(uint64_t numerator, uint64_t denominator) {
+    uint64_t whole;
+    uint64_t tenths;
+
+    if (denominator == 0u) {
+        tty_puts("0.0%");
+        return;
+    }
+
+    whole = (numerator * 100u) / denominator;
+    tenths = ((numerator * 1000u) / denominator) % 10u;
+    print_u64(whole);
+    tty_putchar('.');
+    print_u64(tenths);
+    tty_putchar('%');
+}
+
 static void print_ipv4(uint32_t ip) {
     print_u64((ip >> 24u) & 0xffu);
     tty_putchar('.');
@@ -180,6 +258,12 @@ static void print_mac(const uint8_t *mac) {
 static void print_hex_byte(uint8_t value) {
     print_hex_nibble((uint8_t)(value >> 4u));
     print_hex_nibble((uint8_t)(value & 0x0fu));
+}
+
+static void print_hex_u32(uint32_t value) {
+    for (int shift = 28; shift >= 0; shift -= 4) {
+        print_hex_nibble((uint8_t)((value >> (uint32_t)shift) & 0x0fu));
+    }
 }
 
 static void append_string(char *dst, size_t capacity, size_t *length, const char *src) {
@@ -213,10 +297,296 @@ static void print_fs_entry(const char *path, size_t size) {
     tty_puts(" bytes\n");
 }
 
+static uint8_t parse_acl_perms(const char *text, uint8_t *perms_out) {
+    uint8_t perms = 0u;
+
+    if (text == NULL || perms_out == NULL || text[0] == '\0') {
+        return 0u;
+    }
+    for (size_t i = 0u; text[i] != '\0'; ++i) {
+        if (text[i] == 'r') {
+            perms |= FS_ACL_READ;
+        } else if (text[i] == 'w') {
+            perms |= FS_ACL_WRITE;
+        } else if (text[i] == 'x') {
+            perms |= FS_ACL_EXEC;
+        } else if (text[i] != '-') {
+            return 0u;
+        }
+    }
+    *perms_out = perms;
+    return 1u;
+}
+
+static void print_acl_perms(uint8_t perms) {
+    tty_putchar((perms & FS_ACL_READ) != 0u ? 'r' : '-');
+    tty_putchar((perms & FS_ACL_WRITE) != 0u ? 'w' : '-');
+    tty_putchar((perms & FS_ACL_EXEC) != 0u ? 'x' : '-');
+}
+
+static void shell_top_report(void) {
+    const uint64_t total_pages = pmm_total_page_count();
+    const uint64_t used_pages = pmm_used_page_count();
+    const uint64_t free_pages = total_pages >= used_pages ? total_pages - used_pages : 0u;
+    const uint64_t before_total = scheduler_time_ns();
+    const uint64_t before_idle = scheduler_idle_ns_now();
+    const uint64_t before_count_raw = scheduler_process_count();
+    const size_t before_count = before_count_raw < SHELL_TOP_MAX_TASKS
+        ? (size_t)before_count_raw : SHELL_TOP_MAX_TASKS;
+    uint64_t after_total, after_idle, sample_ticks, idle_ticks, busy_ticks;
+    uint64_t accounted_ticks = 0u;
+    uint64_t after_count_raw;
+    size_t after_count;
+    size_t group_count = 0u;
+    int truncated = before_count_raw > SHELL_TOP_MAX_TASKS;
+
+    for (size_t i = 0u; i < before_count; ++i) {
+        scheduler_process_info_t info;
+        if (scheduler_process_info_at(i, &info) != 0) {
+            shell_top_before[i] = (shell_top_task_sample_t){0};
+            continue;
+        }
+        shell_top_before[i] = (shell_top_task_sample_t){
+            .tid = info.pid, .process_id = info.process_id, .cpu_ticks = scheduler_thread_cpu_ns(info.pid)
+        };
+    }
+
+    /* One second at the 100 Hz scheduler timer. Sleeping leaves the WebKit
+       workload runnable and makes this a measured interval, not a since-boot
+       average. */
+    process_sleep_ticks(100u);
+
+    after_total = scheduler_time_ns();
+    after_idle = scheduler_idle_ns_now();
+    sample_ticks = after_total >= before_total ? after_total - before_total : 0u;
+    const uint64_t sample_elapsed=sample_ticks;
+    const uint32_t sample_cpus=smp_online_count();
+    sample_ticks=sample_cpus && sample_ticks>UINT64_MAX/sample_cpus?UINT64_MAX:sample_ticks*sample_cpus;
+    idle_ticks = after_idle >= before_idle ? after_idle - before_idle : 0u;
+    busy_ticks = sample_ticks >= idle_ticks ? sample_ticks - idle_ticks : 0u;
+    after_count_raw = scheduler_process_count();
+    after_count = after_count_raw < SHELL_TOP_MAX_TASKS
+        ? (size_t)after_count_raw : SHELL_TOP_MAX_TASKS;
+    truncated |= after_count_raw > SHELL_TOP_MAX_TASKS;
+    memset(shell_top_groups, 0, sizeof(shell_top_groups));
+
+    for (size_t i = 0u; i < after_count; ++i) {
+        scheduler_process_info_t info;
+        uint64_t previous_ticks = 0u;
+        uint64_t delta;
+        size_t group_index;
+        if (scheduler_process_info_at(i, &info) != 0 || info.pid == 0u) continue;
+        for (size_t j = 0u; j < before_count; ++j) {
+            if (shell_top_before[j].tid == info.pid) {
+                previous_ticks = shell_top_before[j].cpu_ticks;
+                break;
+            }
+        }
+        const uint64_t received_ns=scheduler_thread_cpu_ns(info.pid);
+        delta = received_ns >= previous_ticks ? received_ns - previous_ticks : 0u;
+        for (group_index = 0u; group_index < group_count; ++group_index) {
+            if (shell_top_groups[group_index].process_id == info.process_id) break;
+        }
+        if (group_index == group_count) {
+            if (group_count >= SHELL_TOP_MAX_TASKS) { truncated = 1; continue; }
+            shell_top_groups[group_index].process_id = info.process_id;
+            shell_top_groups[group_index].parent_pid = info.parent_pid;
+            memcpy(shell_top_groups[group_index].name, info.name,
+                   sizeof(shell_top_groups[group_index].name));
+            ++group_count;
+        }
+        shell_top_groups[group_index].cpu_ticks += delta;
+        ++shell_top_groups[group_index].thread_count;
+        if (delta > shell_top_groups[group_index].hottest_ticks) {
+            shell_top_groups[group_index].hottest_ticks = delta;
+            shell_top_groups[group_index].hottest_tid = info.pid;
+        }
+    }
+
+    for (size_t i = 0u; i < group_count; ++i) {
+        size_t best = i;
+        for (size_t j = i + 1u; j < group_count; ++j) {
+            if (shell_top_groups[j].cpu_ticks > shell_top_groups[best].cpu_ticks) best = j;
+        }
+        if (best != i) {
+            const shell_top_group_row_t swap = shell_top_groups[i];
+            shell_top_groups[i] = shell_top_groups[best];
+            shell_top_groups[best] = swap;
+        }
+        accounted_ticks += shell_top_groups[i].cpu_ticks;
+    }
+
+    tty_puts("CPU sample: "); print_u64(sample_elapsed/1000000ull); tty_puts(" ms elapsed; ");
+    print_u64(sample_cpus);tty_puts(" CPUs (percent of total capacity)\n");
+    tty_puts("busy: "); print_percent(busy_ticks, sample_ticks);
+    tty_puts("  idle: "); print_percent(idle_ticks, sample_ticks);
+    tty_puts("  unattributed kernel/IRQ: ");
+    print_percent(busy_ticks > accounted_ticks ? busy_ticks - accounted_ticks : 0u, sample_ticks);
+    tty_puts("\nRAM: "); print_kib(used_pages * 4096u); tty_puts(" / ");
+    print_kib(total_pages * 4096u); tty_puts(" used; ");
+    print_kib(free_pages * 4096u); tty_puts(" free; tasks: ");
+    print_u64(after_count_raw); tty_putchar('\n');
+    tty_puts("\nPID PPID THREADS CPU% CPU-MS HOT-TID NAME\n");
+    for (size_t i = 0u; i < group_count && i < 10u; ++i) {
+        const shell_top_group_row_t *row = &shell_top_groups[i];
+        if (row->cpu_ticks == 0u) continue;
+        print_u64(row->process_id); tty_putchar(' ');
+        print_u64(row->parent_pid); tty_putchar(' ');
+        print_u64(row->thread_count); tty_putchar(' ');
+        print_percent(row->cpu_ticks, sample_ticks); tty_putchar(' ');
+        print_u64(row->cpu_ticks/1000000ull); tty_putchar(' ');
+        print_u64(row->hottest_tid); tty_putchar(' ');
+        tty_puts(row->name); tty_putchar('\n');
+    }
+    if (group_count == 0u || accounted_ticks == 0u) {
+        tty_puts("No user task accumulated a scheduler tick in this interval.\n");
+    }
+    if (truncated) tty_puts("top: task list clipped to 128 live threads\n");
+}
+
+static const char *download_status_name(uint32_t status) {
+    switch (status) {
+    case VEX_DOWNLOAD_RUNNING: return "running";
+    case VEX_DOWNLOAD_FINISHED: return "finished";
+    case VEX_DOWNLOAD_FAILED: return "failed";
+    case VEX_DOWNLOAD_CANCELLED: return "cancelled";
+    default: return "unknown";
+    }
+}
+
+static void print_downloads(void) {
+    static vex_download_state_t list[VEX_BROWSER_MAX_DOWNLOADS];
+    const unsigned count = browser_downloads_snapshot(list, VEX_BROWSER_MAX_DOWNLOADS);
+
+    if (count == 0u) {
+        tty_puts("no downloads in this browser session\n");
+        return;
+    }
+    tty_puts("ID  STATE      BYTES (received/total)  FILE\n");
+    for (unsigned i = 0u; i < count; ++i) {
+        const vex_download_state_t *download = &list[i];
+
+        print_u64(download->id);
+        tty_puts("   ");
+        tty_puts(download_status_name(download->status));
+        tty_puts("   ");
+        print_u64(download->received_bytes);
+        tty_putchar('/');
+        if (download->total_bytes == VEX_DOWNLOAD_SIZE_UNKNOWN) {
+            tty_putchar('?');
+        } else {
+            print_u64(download->total_bytes);
+        }
+        tty_puts("   ");
+        /* Only a finished download has a file at its destination. */
+        tty_puts(download->status == VEX_DOWNLOAD_FINISHED ? download->destination : download->name);
+        if (download->error[0] != '\0') {
+            tty_puts("  (");
+            tty_puts(download->error);
+            tty_putchar(')');
+        }
+        tty_putchar('\n');
+    }
+}
+
+static void shell_downloads_command(const char *argument) {
+    char verb[SHELL_ARG_SIZE];
+    char id_text[SHELL_ARG_SIZE];
+    uint64_t id;
+
+    const char *rest = parse_token(argument, verb, sizeof(verb));
+    if (verb[0] == '\0') {
+        print_downloads();
+        return;
+    }
+    if (string_equals(verb, "cancel")) {
+        (void)parse_token(rest, id_text, sizeof(id_text));
+        if (parse_u64(id_text, &id) != 0 || id == 0u || id > 0xffffffffu) {
+            tty_puts("usage: downloads cancel <id>\n");
+            return;
+        }
+        if (browser_downloads_request_cancel((uint32_t)id) != 0) {
+            tty_puts("no such running download\n");
+            return;
+        }
+        tty_puts("cancel requested\n");
+        return;
+    }
+    tty_puts("usage: downloads [cancel <id>]\n");
+}
+
+static void print_fd_usage(void) {
+    static vex_fd_usage_t usage[64];
+    const unsigned count = vex_fd_usage_snapshot(usage, 64u);
+
+    tty_puts("PID OPEN-FDS\n");
+    for (unsigned i = 0u; i < count; ++i) {
+        print_u64(usage[i].pid);
+        tty_puts("   ");
+        print_u64(usage[i].open_descriptors);
+        tty_putchar('\n');
+    }
+}
+
+static int shell_launch_desktop_app(const char *path) {
+    uint32_t caps=string_equals(path,"/usr/bin/kyil-launcher")?VEX_CAP_ALL:0;
+    if(!scheduler_current_has_capability(caps))return -1;
+    uint32_t pid=0;if(elf_spawn_pid_caps(path,&pid,caps)!=0 || !pid)return -1;
+    scheduler_detach_process(pid);return 0;
+}
 void shell_execute_command(const char *line) {
+    ora_view_t fs_lease_0 __attribute__((cleanup(ora_view_release)))={0};
+    while (line[0] != '\0' && line[0] <= ' ') {
+        ++line;
+    }
+
     if (line[0] == '\0') {
         return;
     }
+    if(string_equals(line,"shutdown") || string_equals(line,"reboot")) {
+        if(power_request(string_equals(line,"shutdown")?POWER_OFF:POWER_REBOOT))
+            tty_puts("power: denied, unavailable or already in progress\n");
+        return;
+    }
+    if(string_equals(line,"powerinfo")){power_info();return;}
+    if(string_equals(line,"guibench")){gui_performance_benchmark();return;}
+    if(starts_with_word(line,"vexfsformat")) {
+        char part[16],confirmation[16];uint64_t index;
+        const char *rest=parse_token(argument_after_word(line),part,sizeof(part));
+        parse_token(rest,confirmation,sizeof(confirmation));
+        if(parse_u64(part,&index) || index<1 || index>4 || !string_equals(confirmation,"CONFIRM")) {
+            tty_puts("DESTRUCTIVE: vexfsformat <MBR partition 1..4> CONFIRM. Only a dedicated type 0xDA partition; existing VexFS refused.\n");return;
+        }
+        tty_puts(fs_format_partition((unsigned)index)?"format refused/failed; no mount change\n":"partition formatted; reboot to mount. Current RAM files are not copied.\n");return;
+    }
+    if(string_equals(line,"persisttest") || string_equals(line,"persistcheck")) {
+        fs_storage_info_t storage;
+        if(fs_get_storage_info(&storage) || !storage.disk_backed){tty_puts("persistence test REFUSED: no durable native volume mounted\n");return;}
+        unsigned char *data=kmalloc(65536);int failed=data==NULL;
+        if(!failed && string_equals(line,"persisttest")) {
+            for(unsigned i=0;i<65536;i++)data[i]=(unsigned char)(i*37u+11u);
+            failed=fs_write("/home/root/.persist-test.bin",data,65536)!=0 || fs_sync()!=0;
+        }
+        ora_view_t view={0};void *read_data=NULL;size_t size=0;
+        if(!failed)failed=fs_read_view("/home/root/.persist-test.bin",&read_data,&size,&view)!=0 || size!=65536;
+        if(!failed)for(unsigned i=0;i<65536;i++)if(((unsigned char *)read_data)[i]!=(unsigned char)(i*37u+11u)){failed=1;break;}
+        ora_view_release(&view);kfree(data);
+        tty_puts(failed?"persistence payload FAILED\n":"persistence payload PASS (65536 real bytes verified)\n");
+        debug_log_puts(failed?"persistence: FAILED\n":"persistence: PASS 65536 bytes\n");return;
+    }
+    if(string_equals(line,"guiprof")){if(profiler_start(15))tty_puts("guiprof: already running\n");else tty_puts("guiprof: 15s real GUI profile; move/resize windows\n");return;}
+    if(string_equals(line,"runtimetest")) {
+        static const char *dirs[]={"/tmp/d","/tmp/d/wpe","/tmp/d/wpe/storage","/tmp/s","/home/root/.config","/tmp/c","/tmp/c/fontconfig","/tmp/c/wpe"};
+        unsigned failed=0;
+        for(unsigned i=0;i<sizeof(dirs)/sizeof(dirs[0]);i++) {
+            struct stat metadata;(void)mkdir(dirs[i],0700);
+            if(stat(dirs[i],&metadata) || (metadata.st_mode&0170000)!=0040000){++failed;tty_puts("runtime directory failed: ");tty_puts(dirs[i]);tty_putchar('\n');}
+        }
+        tty_puts(failed?"runtime directory test FAILED\n":"runtime directory test PASS (real writable directories)\n");
+        debug_log_puts(failed?"runtime-directory: FAILED\n":"runtime-directory: PASS\n");return;
+    }
+    if(string_equals(line,"sync")){tty_puts(vex_fd_sync_all() || fs_sync()?"sync: failed\n":"sync: completed (RAM-only data remains volatile)\n");return;}
+    if(starts_with_word(line,"driver")) {driver_manager_command(argument_after_word(line));return;}
 
     if (string_equals(line, "cls")) {
         tty_clear();
@@ -224,7 +594,7 @@ void shell_execute_command(const char *line) {
     }
 
     if (string_equals(line, "help")) {
-        tty_puts("commands: cls help sysinfo ps kill log echo whoami useradd login diskinfo ifconfig netstat resolve https spotlight ls cat write rm ipc_write ipc_read inst(info/translate/install/remove) run halt\n");
+        tty_puts("commands: cls help sysinfo top flowstats ps kmapstats(reset) kmaptest kill log secaudit echo whoami useradd login diskinfo ifconfig netstat resolve https spotlight ls cat write rm chmod getfacl setfacl ipc_write ipc_read inst(info/translate/install/remove) gfm browser downloads(cancel) fdstats nettest gputest vktest mousetest elevatetest attacktest attackkill run suchu sync shutdown reboot powerinfo vexfsformat persisttest persistcheck runtimetest guibench guiprof halt\n");
         return;
     }
 
@@ -239,7 +609,7 @@ void shell_execute_command(const char *line) {
             return;
         }
 
-        tty_puts("VexOS system\n");
+        tty_puts("KyIlOS system\n");
         tty_puts("uptime: ");
         print_u64(bulk.monotonic_ms / 1000u);
         tty_puts("s (");
@@ -265,11 +635,62 @@ void shell_execute_command(const char *line) {
         return;
     }
 
+    if (string_equals(line, "top")) {
+        shell_top_report();
+        return;
+    }
+    if (string_equals(line, "flowstats")) {
+        scheduler_flow_report();scheduler_dump_cpu_distribution(0u);
+        tty_puts("FlowSched counters written to serial log\n");return;
+    }
+    if (string_equals(line, "kmapstats") || string_equals(line, "kmapstats reset")) {
+        kernel_mapping_stats_report(string_equals(line, "kmapstats reset"));
+        return;
+    }
+    if (string_equals(line, "kmaptest")) {
+        int result = vmm_kernel_mapping_selftest();
+        const char *message = result == 0
+            ? "kmap-test: PASS (6 threads, 2 CR3s, late root, shared kernel tree, NX/USER, unmap, 32 teardown cycles)\n"
+            : "kmap-test: FAILED\n";
+        tty_puts(message); debug_log_puts(message);
+        return;
+    }
+
+#if VEX_BROWSER_DIAGNOSTIC
+    if (string_equals(line, "browsertrace")) {
+        extern void compat_linux_debug_tasks(void);
+        compat_linux_debug_tasks();tty_puts("Browser task snapshot written to serial log.\n");return;
+    }
+#endif
+    if (starts_with_word(line, "prof")) {
+        char seconds_text[SHELL_ARG_SIZE];
+        uint64_t seconds = 30u;
+
+        (void)parse_token(argument_after_word(line), seconds_text, sizeof(seconds_text));
+        if (seconds_text[0] != '\0' && (parse_u64(seconds_text, &seconds) != 0 || seconds == 0u)) {
+            tty_puts("usage: prof [seconds]\n");
+            return;
+        }
+        if (profiler_start((uint32_t)seconds) != 0) {
+            tty_puts("profiler busy or out of memory\n");
+            return;
+        }
+        tty_puts("profiling; the report goes to the serial log when the window ends\n");
+        return;
+    }
+    if (string_equals(line, "fdstats")) {
+        print_fd_usage();
+        return;
+    }
+    if (starts_with_word(line, "downloads")) {
+        shell_downloads_command(argument_after_word(line));
+        return;
+    }
     if (string_equals(line, "ps")) {
         scheduler_process_info_t info;
         const uint64_t count = scheduler_process_count();
 
-        tty_puts("PID PPID STATE     PRI USER UID ADMIN SLEEP\n");
+        tty_puts("PID PPID STATE     PRI USER UID ADMIN CAPS SLEEP\n");
         for (uint64_t i = 0; i < count; ++i) {
             if (scheduler_process_info_at(i, &info) != 0) {
                 continue;
@@ -287,6 +708,8 @@ void shell_execute_command(const char *line) {
             print_u64(info.uid);
             tty_putchar(' ');
             tty_puts(info.is_admin ? "yes" : "no");
+            tty_putchar(' ');
+            print_hex_u32(info.capabilities);
             tty_putchar(' ');
             print_u64(info.sleep_until_tick);
             tty_putchar('\n');
@@ -325,6 +748,35 @@ void shell_execute_command(const char *line) {
         shell_log_buffer[copied] = '\0';
         tty_puts(shell_log_buffer);
         if (shell_log_buffer[copied - 1u] != '\n') {
+            tty_putchar('\n');
+        }
+        return;
+    }
+
+    if (string_equals(line, "secaudit")) {
+        security_audit_event_t events[32];
+        size_t count;
+        if (!user_has_capability(VEX_CAP_AUDIT_ADMIN)) {
+            tty_puts("secaudit denied\n");
+            return;
+        }
+        count = security_audit_copy_recent(events, 32u);
+        if (count == 0u) {
+            tty_puts("secaudit empty\n");
+            return;
+        }
+        for (size_t i = 0u; i < count; ++i) {
+            print_u64(events[i].ticks);
+            tty_puts(" pid=");
+            print_u64(events[i].pid);
+            tty_puts(" uid=");
+            print_u64(events[i].uid);
+            tty_puts(events[i].allowed ? " allow " : " deny ");
+            tty_puts(events[i].action);
+            tty_puts(" caps=");
+            print_hex_u32(events[i].caps);
+            tty_puts(" target=");
+            tty_puts(events[i].target);
             tty_putchar('\n');
         }
         return;
@@ -392,6 +844,10 @@ void shell_execute_command(const char *line) {
         tty_puts("Size: ");
         print_u64((disk_size() * 512ull) / (1024ull * 1024ull));
         tty_puts(" MB\n");
+        return;
+    }
+    if (string_equals(line,"diskselftest")) {
+        tty_puts(disk_fixture_self_test()==0 ? "Tagged ATA fixture: PASS\n" : "Tagged ATA fixture: refused/FAILED\n");
         return;
     }
 
@@ -564,7 +1020,7 @@ void shell_execute_command(const char *line) {
         {
             void *data = NULL;
             size_t size = 0;
-            if (fs_read(path, &data, &size) != 0) {
+            if (fs_read_view(path,&data,&size, &fs_lease_0) != 0) {
                 tty_puts("not found: ");
                 tty_puts(path);
                 tty_putchar('\n');
@@ -634,6 +1090,97 @@ void shell_execute_command(const char *line) {
         return;
     }
 
+    if (starts_with_word(line, "chmod")) {
+        char mode_text[SHELL_ARG_SIZE];
+        char path[SHELL_PATH_SIZE];
+        uint64_t mode_value = 0u;
+        const char *rest = parse_token(argument_after_word(line), mode_text, sizeof(mode_text));
+        (void)parse_token(rest, path, sizeof(path));
+
+        if (mode_text[0] == '\0' || path[0] == '\0' || parse_u64(mode_text, &mode_value) != 0 || mode_value > 0777u) {
+            tty_puts("usage: chmod <mode> <path>\n");
+            return;
+        }
+
+        if (fs_set_mode(path, (uint32_t)mode_value) != 0) {
+            tty_puts("chmod failed\n");
+        }
+        return;
+    }
+
+    if (starts_with_word(line, "getfacl")) {
+        char path[SHELL_PATH_SIZE];
+        fs_metadata_t metadata;
+        fs_acl_entry_t entries[FS_ACL_MAX_ENTRIES];
+        size_t acl_count = 0u;
+        (void)parse_token(argument_after_word(line), path, sizeof(path));
+
+        if (path[0] == '\0') {
+            tty_puts("usage: getfacl <path>\n");
+            return;
+        }
+        if (fs_get_metadata(path, &metadata, 1u) != 0) {
+            tty_puts("getfacl failed\n");
+            return;
+        }
+
+        tty_puts("owner=");
+        tty_puts(user_name_for_uid(metadata.uid));
+        tty_puts(" uid=");
+        print_u64(metadata.uid);
+        tty_puts(" mode=");
+        print_u64(metadata.mode);
+        tty_putchar('\n');
+
+        if (fs_acl_copy(path, entries, FS_ACL_MAX_ENTRIES, &acl_count) != 0 || acl_count == 0u) {
+            tty_puts("acl empty\n");
+            return;
+        }
+
+        for (size_t i = 0u; i < acl_count; ++i) {
+            tty_puts("user:");
+            tty_puts(user_name_for_uid(entries[i].uid));
+            tty_puts(" ");
+            print_acl_perms(entries[i].perms);
+            tty_putchar('\n');
+        }
+        return;
+    }
+
+    if (starts_with_word(line, "setfacl")) {
+        char path[SHELL_PATH_SIZE];
+        char username[SHELL_ARG_SIZE];
+        char perms_text[SHELL_ARG_SIZE];
+        uint32_t uid = 0u;
+        uint8_t perms = 0u;
+        const char *rest = parse_token(argument_after_word(line), path, sizeof(path));
+        rest = parse_token(rest, username, sizeof(username));
+        (void)parse_token(rest, perms_text, sizeof(perms_text));
+
+        if (path[0] == '\0' || username[0] == '\0' || perms_text[0] == '\0') {
+            tty_puts("usage: setfacl <path> <user> <rwx|clear>\n");
+            return;
+        }
+        if (user_lookup_uid(username, &uid) != 0) {
+            tty_puts("unknown user\n");
+            return;
+        }
+        if (string_equals(perms_text, "clear")) {
+            if (fs_acl_clear(path, uid) != 0) {
+                tty_puts("setfacl failed\n");
+            }
+            return;
+        }
+        if (!parse_acl_perms(perms_text, &perms)) {
+            tty_puts("usage: setfacl <path> <user> <rwx|clear>\n");
+            return;
+        }
+        if (fs_acl_set(path, uid, perms) != 0) {
+            tty_puts("setfacl failed\n");
+        }
+        return;
+    }
+
     if (starts_with_word(line, "ipc_write")) {
         char key[SHELL_PATH_SIZE];
         const char *value = parse_token(argument_after_word(line), key, sizeof(key));
@@ -643,16 +1190,7 @@ void shell_execute_command(const char *line) {
         }
 
         {
-            void *existing = ipc_get(key);
-            void *stored = NULL;
-            if (existing != NULL) {
-                ipc_release(key);
-                stored = ipc_update(key, (void *)value, string_length(value) + 1u);
-            } else {
-                stored = ipc_share(key, (void *)value, string_length(value) + 1u);
-            }
-
-            if (stored == NULL) {
+            if (ipc_store(key,value,string_length(value)+1u)!=0) {
                 tty_puts("ipc_write failed\n");
             }
         }
@@ -668,15 +1206,14 @@ void shell_execute_command(const char *line) {
         }
 
         {
-            const char *value = ipc_get(key);
-            if (value == NULL) {
+            ora_view_t view __attribute__((cleanup(ora_view_release)))={0};
+            if (ipc_acquire(key,&view)!=0) {
                 tty_puts("not found\n");
                 return;
             }
 
-            tty_puts(value);
+            tty_puts(ora_view_data(&view));
             tty_putchar('\n');
-            ipc_release(key);
         }
         return;
     }
@@ -699,9 +1236,28 @@ void shell_execute_command(const char *line) {
         return;
     }
 
-    if (string_equals(line, "browser") || string_equals(line, "webkit")) {
-        if (elf_spawn("/home/root/bin/webkit") != 0) {
-            tty_puts("browser launch failed\n");
+    if (starts_with_word(line, "browser") || starts_with_word(line, "webkit")) {
+        gui_browser_launch();
+        return;
+    }
+
+    if (string_equals(line, "gfm") || string_equals(line, "files")) {
+        if (shell_launch_desktop_app("/usr/bin/kyil-files") != 0) {
+            tty_puts("gfm launch failed\n");
+        }
+        return;
+    }
+
+    if (string_equals(line, "paint")) {
+        if (shell_launch_desktop_app("/usr/bin/kyil-paint") != 0) {
+            tty_puts("paint launch failed\n");
+        }
+        return;
+    }
+
+    if (string_equals(line, "launcher")) {
+        if (shell_launch_desktop_app("/usr/bin/kyil-launcher") != 0) {
+            tty_puts("launcher launch failed\n");
         }
         return;
     }
@@ -722,12 +1278,20 @@ void shell_execute_command(const char *line) {
 
     if (string_equals(line, "gpuinfo")) {
         vex_gpu_info_t info;
+        vex_gpu_caps_t caps;
         if (gpu_query_info(&info) != 0) {
             tty_puts("gpu unavailable\n");
             return;
         }
+        if (gpu_query_caps(&caps) != 0) {
+            tty_puts("gpu capabilities unavailable\n");
+            return;
+        }
         tty_puts("backend: ");
         print_u64(info.backend);
+        tty_puts(" (");
+        tty_puts(caps.driver_name);
+        tty_puts(")");
         tty_puts("\nvendor: ");
         print_u64(info.vendor_id);
         tty_puts("\ndevice: ");
@@ -740,6 +1304,8 @@ void shell_execute_command(const char *line) {
         print_u64(info.framebuffer_pitch);
         tty_puts("\nqueues: ");
         print_u64(info.queue_count);
+        tty_puts("\ncapabilities: ");
+        print_u64(caps.capabilities);
         tty_putchar('\n');
         return;
     }
@@ -765,17 +1331,80 @@ void shell_execute_command(const char *line) {
         return;
     }
 
-    if (starts_with_word(line, "run")) {
-        char path[SHELL_PATH_SIZE];
-        (void)parse_token(argument_after_word(line), path, sizeof(path));
-        if (path[0] == '\0') {
-            tty_puts("usage: run <path>\n");
+    if (string_equals(line, "elevatetest")) {
+        if (elf_spawn("/home/root/bin/elevate_test") != 0) {
+            tty_puts("elevatetest launch failed\n");
+        }
+        return;
+    }
+
+    if (string_equals(line, "attacktest")) {
+        if (elf_spawn("/home/root/bin/attack_test") != 0) {
+            tty_puts("attacktest launch failed\n");
+        }
+        return;
+    }
+
+    if (string_equals(line, "attackkill")) {
+        uint32_t payload_pid = 0u;
+        if (elf_spawn_pid("/home/root/bin/attack_kill_payload", &payload_pid) != 0) {
+            tty_puts("attackkill payload launch failed\n");
+        } else {
+            scheduler_detach_process(payload_pid);
+            tty_puts("attackkill payload launched\n");
+        }
+        return;
+    }
+
+    /* run <path> [args...]       a native program, waited for
+       suchu <args...>            shorthand for run /usr/bin/suchu <args...>
+       Arguments are separated by spaces; "double quotes" group one. The
+       program gets PATH, TMPDIR and HOME so that suchu comp can find
+       ocamlopt, as and ld. */
+    if (starts_with_word(line, "run") || starts_with_word(line, "suchu")) {
+        static char words[SHELL_RUN_LINE];
+        const char *argv[SHELL_RUN_MAX_ARGS + 1];
+        static const char *const envp[] = {
+            "PATH=/usr/bin:/bin", "TMPDIR=/tmp", "HOME=/home/root", "TERM=dumb",
+        };
+        size_t argc = 0u, used = 0u;
+        const char *cursor = line;
+        int status = 0;
+
+        if (starts_with_word(line, "suchu")) {
+            argv[argc++] = "/usr/bin/suchu";
+        }
+        cursor = argument_after_word(line);
+        while (*cursor != '\0' && argc < SHELL_RUN_MAX_ARGS) {
+            char quote = 0;
+            while (*cursor == ' ') ++cursor;
+            if (*cursor == '\0') break;
+            argv[argc++] = &words[used];
+            if (*cursor == '"') quote = *cursor++;
+            while (*cursor != '\0' && (quote ? *cursor != quote : *cursor != ' ') &&
+                   used + 1u < sizeof(words)) {
+                words[used++] = *cursor++;
+            }
+            if (quote && *cursor == quote) ++cursor;
+            if (used + 1u >= sizeof(words)) break;
+            words[used++] = '\0';
+        }
+        argv[argc] = NULL;
+        if (argc == 0u) {
+            tty_puts("usage: run <path> [args...]   |   suchu run|comp|build <file.suchu> ...\n");
             return;
         }
-
-        if (elf_load(path) != 0) {
-            tty_puts("run failed\n");
+        if (elf_load_args(argv[0], argv, argc, envp, sizeof(envp) / sizeof(envp[0]), &status) != 0) {
+            tty_puts("run failed: ");
+            tty_puts(argv[0]);
+            tty_putchar('\n');
             return;
+        }
+        if (status != 0) {
+            char line_out[48];
+            snprintf(line_out, sizeof(line_out), "[exit status %d]\n",
+                     (status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f));
+            tty_puts(line_out);
         }
         return;
     }

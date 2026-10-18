@@ -1,0 +1,179 @@
+// A falling-sand simulator.
+//
+// The grid is one flat list, a cell per entry, so reaching a coordinate is a
+// multiply and an add rather than a list inside a list. A grain falls straight
+// down when it can, slides to whichever side is free when it cannot, and settles
+// when neither is.
+//
+// The whole grid is painted with a single draw.rects. One call per frame carries
+// every grain, and the loop over them runs inside the backend. Painting them one
+// at a time would be ten thousand calls a frame, which is the thing a Canvas
+// exists to avoid.
+
+import draw;
+
+COLUMNS = 110;
+ROWS = 80;
+CELL = 7;
+
+EMPTY = 0;
+SAND = 1;
+WALL = 2;
+
+// Colours as numbers rather than as text: a flat list of numbers has nowhere to
+// put a string, and choosing one per cell should not build one.
+SAND_COLOUR = 12759680;
+WALL_COLOUR = 5596791;
+
+grid = [];
+frame = 0;
+
+fun index_of(x, y) {
+  return y * COLUMNS + x;
+}
+
+fun build_grid() {
+  cell = 0;
+  total = COLUMNS * ROWS;
+  while (cell < total) {
+    push(grid, EMPTY);
+    cell = cell + 1;
+  }
+  // Two shelves for the sand to pile on and spill off.
+  add_shelf(18, 46, 30);
+  add_shelf(58, 92, 58);
+}
+
+fun add_shelf(from_x, to_x, y) {
+  x = from_x;
+  while (x <= to_x) {
+    grid[index_of(x, y)] = WALL;
+    x = x + 1;
+  }
+}
+
+fun pour() {
+  // A steady source near the top, wide enough to make a heap.
+  // round(), because '/' always leaves the integers and an index has to be one.
+  middle = round(COLUMNS / 2);
+  x = middle - 3;
+  while (x < middle + 3) {
+    spot = index_of(x, 1);
+    if (grid[spot] == EMPTY) {
+      grid[spot] = SAND;
+    }
+    x = x + 1;
+  }
+}
+
+fun settle() {
+  // Bottom upwards, so a grain that moves this frame is not moved again by the
+  // same pass.
+  y = ROWS - 2;
+  // The sweep changes direction every frame. Going one way only, a grain that
+  // slides the way the sweep is heading is met again in the same pass and slides
+  // again, so a pile leans downwind. Alternating cancels it out.
+  rightwards = frame % 2 == 0;
+  while (y >= 0) {
+    step = if rightwards then 1 else -1;
+    x = if rightwards then 0 else COLUMNS - 1;
+    remaining = COLUMNS;
+    while (remaining > 0) {
+      remaining = remaining - 1;
+      here = index_of(x, y);
+      if (grid[here] == SAND) {
+        below = index_of(x, y + 1);
+        if (grid[below] == EMPTY) {
+          grid[here] = EMPTY;
+          grid[below] = SAND;
+        } else {
+          // Which side to try first alternates, so a pile spreads evenly
+          // instead of leaning one way.
+          first = if (x + frame) % 2 == 0 then -1 else 1;
+          if !slide(x, y, first) {
+            slide(x, y, 0 - first);
+          }
+        }
+      }
+      x = x + step;
+    }
+    y = y - 1;
+  }
+}
+
+fun slide(x, y, direction) {
+  target_x = x + direction;
+  if target_x < 0 || target_x >= COLUMNS {
+    return false;
+  }
+  target = index_of(target_x, y + 1);
+  if grid[target] != EMPTY {
+    return false;
+  }
+  grid[index_of(x, y)] = EMPTY;
+  grid[target] = SAND;
+  return true;
+}
+
+fun paint() {
+  // One flat list: x, y, width, height, colour, five numbers per cell.
+  shapes = [];
+  y = 0;
+  while (y < ROWS) {
+    x = 0;
+    while (x < COLUMNS) {
+      cell = grid[index_of(x, y)];
+      if cell != EMPTY {
+        push(shapes, x * CELL);
+        push(shapes, y * CELL);
+        push(shapes, CELL);
+        push(shapes, CELL);
+        if cell == SAND {
+          push(shapes, SAND_COLOUR);
+        } else {
+          push(shapes, WALL_COLOUR);
+        }
+      }
+      x = x + 1;
+    }
+    y = y + 1;
+  }
+  draw.rects(shapes);
+  return round(len(shapes) / 5);
+}
+
+build_grid();
+
+Window("Falling sand", 800px, 620px) {
+  background: #12161f;
+  layout: column;
+  padding: 10px;
+  spacing: 8px;
+
+  Label {
+    id: "readout";
+    text: "settling...";
+    color: #c9d1d9;
+    font-size: 14px;
+  }
+
+  Canvas {
+    id: "surface";
+    width: 770px;
+    height: 560px;
+    background: #05070c;
+    onDraw: {
+      grains = paint();
+      set_text(readout, "grains: " @ grains @ "   frame: " @ frame);
+    };
+  }
+
+  Timer {
+    interval: 16ms;
+    onTick: {
+      frame = frame + 1;
+      pour();
+      settle();
+    };
+  }
+}

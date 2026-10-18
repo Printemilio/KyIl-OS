@@ -42,6 +42,7 @@ typedef long long nfds_t;
 #define O_APPEND    0x0400
 #define O_NONBLOCK  0x0800
 #define O_CLOEXEC   0x80000
+#define MSG_DONTWAIT 0x40
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -58,11 +59,18 @@ typedef long long nfds_t;
 #define MAP_FAILED ((void *)(uintptr_t)-1)
 
 #define AF_UNSPEC 0
+#define AF_UNIX   1
 #define AF_INET   2
+#ifndef SOCK_DGRAM
+#define SOCK_DGRAM 2
+#endif
 
 #define SOL_SOCKET 1
 
 #define SOCK_STREAM 1
+#define SOCK_SEQPACKET 5
+#define SOCK_NONBLOCK 0x800
+#define SOCK_CLOEXEC  0x80000
 
 #define SO_TYPE 3
 #define SO_ERROR 4
@@ -72,10 +80,16 @@ typedef long long nfds_t;
 #define POLLIN  0x0001
 #define POLLOUT 0x0004
 #define POLLERR 0x0008
+#define POLLNVAL 0x0020
 #define POLLHUP 0x0010
 
 #define F_GETFL 3
 #define F_SETFL 4
+#define F_GETFD 1
+#define F_SETFD 2
+#define F_DUPFD 0
+#define F_DUPFD_CLOEXEC 1030
+#define FD_CLOEXEC 1
 
 #define _SC_PAGESIZE 30
 #define _SC_PAGE_SIZE _SC_PAGESIZE
@@ -89,16 +103,21 @@ typedef long long nfds_t;
 #define S_IFMT  0170000
 #define S_IFREG 0100000
 #define S_IFDIR 0040000
+#define S_IFLNK 0120000
+#define S_IFCHR 0020000
+#define S_IFSOCK 0140000
 
 #define R_OK 4
 #define W_OK 2
 #define X_OK 1
 #define F_OK 0
 
+#define EPERM         1
 #define ENOENT        2
 #define ESRCH         3
 #define EINTR         4
 #define EIO           5
+#define E2BIG         7
 #define EBADF         9
 #define ECHILD       10
 #define EAGAIN       11
@@ -112,21 +131,32 @@ typedef long long nfds_t;
 #define ENOTDIR      20
 #define EISDIR       21
 #define EINVAL       22
+#define ENOTTY       25
 #define ENFILE       23
 #define EMFILE       24
 #define ENOSPC       28
 #define ESPIPE       29
+#define ERANGE       34
+#define ENAMETOOLONG 36
+#define ENOTEMPTY    39
 #define EROFS        30
 #define EPIPE        32
+#define ENOLCK       37
 #define ENOSYS       38
 #define ENOTSUP      95
+#define ENOTSOCK 88
+#define EISCONN 106
+#define EALREADY 114
+#define EINPROGRESS 115
 #define EAFNOSUPPORT 97
+#define EMSGSIZE      90
 #define EADDRNOTAVAIL 99
 #define ENETUNREACH 101
 #define ECONNRESET  104
 #define ENOBUFS     105
 #define ENOTCONN    107
 #define ETIMEDOUT   110
+#define ECANCELED   125
 #define ECONNREFUSED 111
 
 #define WNOHANG 0x1
@@ -199,6 +229,7 @@ struct sockaddr_in {
 };
 
 typedef struct vex_web_fd_object vex_web_fd_object_t;
+typedef struct vex_message_attachment vex_message_attachment_t;
 
 typedef struct vex_web_fd_ops {
     ssize_t (*read)(void *ctx, void *buffer, size_t count);
@@ -208,12 +239,19 @@ typedef struct vex_web_fd_ops {
     int (*seek)(void *ctx, off_t offset, int whence, off_t *result);
     int (*fsync)(void *ctx);
     int (*poll)(void *ctx, short events, short *revents);
+    /* Positional I/O must not mutate the open-file-description cursor.  A
+     * missing callback means that the object does not support pread/pwrite. */
+    ssize_t (*pread)(void *ctx, void *buffer, size_t count, off_t offset);
+    ssize_t (*pwrite)(void *ctx, const void *buffer, size_t count, off_t offset);
 } vex_web_fd_ops_t;
 
 struct vex_web_fd_object {
     uint32_t refcount;
     void *ctx;
     const vex_web_fd_ops_t *ops;
+    /* Kernel-private sparse shared pages, owned by the object, not a mapping.
+     * No FD number or process identity participates in page ownership. */
+    void *shared_mapping_pages;
 };
 
 #ifdef __cplusplus
@@ -221,13 +259,25 @@ extern "C" {
 #endif
 
 int *vex_web_errno_location(void);
+int vex_poll_kernel(struct pollfd *fds,nfds_t count,int timeout);
 
 vex_web_fd_object_t *vex_web_fd_object_create(void *ctx, const vex_web_fd_ops_t *ops);
 int vex_web_fd_install(vex_web_fd_object_t *object, int preferred_fd);
+int vex_web_fd_install_flags(vex_web_fd_object_t *object, int preferred_fd,
+                             uint8_t close_on_exec);
 vex_web_fd_object_t *vex_web_fd_acquire(int fd);
-void vex_web_fd_release(vex_web_fd_object_t *object);
+int vex_web_fd_release(vex_web_fd_object_t *object);
+/* Diagnostics: the path of a file object ("iso:<lba>" for a streamed ISO file),
+ * empty when it has none. */
+void vex_web_fd_describe(const vex_web_fd_object_t *object, char *out, size_t capacity);
+ssize_t vex_web_fd_pread_object(vex_web_fd_object_t *object, void *buffer,
+                                size_t count, off_t offset);
+int vex_web_fd_is_wk2_shared_memory(int fd);
 int vex_web_fd_dup_object(int fd, int preferred_fd);
 void vex_web_posix_init(void);
+int vex_web_eventfd_create(uint64_t initial, uint32_t flags);
+int vex_native_message_pair(uint32_t flags, int sv[2]);
+int vex_socketpair_fcntl(vex_web_fd_object_t *object, int command, int arg);
 
 #ifdef __cplusplus
 }
@@ -238,6 +288,11 @@ extern "C" {
 #endif
 
 int open(const char *path, int flags, ...);
+int openat(int dirfd, const char *path, int flags);
+/* open() with an explicit O_CREAT mode (VEX_SYS_OPEN_EX). */
+int vex_open_mode(const char *path, int flags, uint32_t create_mode);
+int vex_web_resolve_dirfd_path(int dirfd, const char *path, char *buffer, size_t size);
+ssize_t vex_web_getdents64(int fd, void *buffer, size_t count);
 int close(int fd);
 ssize_t read(int fd, void *buffer, size_t count);
 ssize_t write(int fd, const void *buffer, size_t count);
@@ -248,6 +303,17 @@ int fsync(int fd);
 int stat(const char *path, struct stat *st);
 int lstat(const char *path, struct stat *st);
 int fstat(int fd, struct stat *st);
+/* VEX_SYS_STAT_EX backends: 0 or a negated errno. */
+struct vex_stat_ex;
+int vex_stat_ex_path(const char *path, int follow, struct vex_stat_ex *out);
+int vex_stat_ex_fd(int fd, struct vex_stat_ex *out);
+int vex_stat_ex_object(int fd, struct vex_stat_ex *out);
+struct vex_set_times_req;
+int vex_set_times(const struct vex_set_times_req *req);
+int vex_fchmod(int fd, uint32_t mode);
+/* Kernel-private metadata helper; no syscall or public native ABI change. */
+int vex_web_fd_times(int fd, void *times);
+uint64_t ladybird_fd_inode_hint(int fd);
 int access(const char *path, int mode);
 int unlink(const char *path);
 int rename(const char *old_path, const char *new_path);
@@ -311,6 +377,14 @@ int socket(int domain, int type, int protocol);
 int connect(int sockfd, const struct sockaddr *addr, uint32_t addrlen);
 ssize_t send(int sockfd, const void *buffer, size_t length, int flags);
 ssize_t recv(int sockfd, void *buffer, size_t length, int flags);
+ssize_t vex_socketpair_send_attached(int sockfd, const void *buffer,
+                                     size_t length, int flags,
+                                     vex_message_attachment_t *attachments,
+                                     size_t attachment_count);
+ssize_t vex_socketpair_receive_attached(int sockfd, void *buffer,
+                                        size_t length, int flags,
+                                        vex_message_attachment_t *attachments,
+                                        size_t *attachment_count);
 int vex_web_connect_hostname(int sockfd, const char *hostname, uint16_t port);
 int bind(int sockfd, const struct sockaddr *addr, uint32_t addrlen);
 int listen(int sockfd, int backlog);
@@ -318,6 +392,15 @@ int accept(int sockfd, struct sockaddr *addr, uint32_t *addrlen);
 int setsockopt(int sockfd, int level, int option_name, const void *option_value, uint32_t option_len);
 int getsockopt(int sockfd, int level, int option_name, void *option_value, uint32_t *option_len);
 int socketpair(int domain, int type, int protocol, int sv[2]);
+/* Linux metadata for native Vex message endpoints; no AF_UNIX pathname is
+ * created or exposed. */
+int vex_socket_network_fd(int fd);
+ssize_t vex_socket_sendto(int fd,const void *buffer,size_t length,int flags,const struct sockaddr *address,uint32_t address_length);
+ssize_t vex_socket_recvfrom(int fd,void *buffer,size_t length,int flags,struct sockaddr *address,uint32_t capacity,uint32_t *actual);
+int vex_socketpair_getsockname(int sockfd, struct sockaddr *address,
+                               uint32_t capacity, uint32_t *actual_length);
+int vex_socketpair_getpeername(int sockfd, struct sockaddr *address,
+                               uint32_t capacity, uint32_t *actual_length);
 
 typedef struct vex_web_display_surface {
     uint32_t width;
@@ -339,6 +422,7 @@ void vex_web_display_clear_pending_dirty(void);
 void vex_web_debug_log(const char *text);
 void vex_web_browser_yield_to_process(void);
 uint32_t vex_web_browser_process_pid(void);
+uint32_t vex_web_browser_parent_pid(void);
 int vex_web_browser_command_push(const char *command);
 int vex_web_browser_command_pop(char *buffer, size_t size);
 void vex_web_browser_results_begin(const char *query);
@@ -362,9 +446,12 @@ const char *vex_web_browser_result_snippet(uint32_t index);
 #define ladybird_errno_location vex_web_errno_location
 #define ladybird_fd_object_create vex_web_fd_object_create
 #define ladybird_fd_install vex_web_fd_install
+#define ladybird_fd_install_flags vex_web_fd_install_flags
 #define ladybird_fd_acquire vex_web_fd_acquire
 #define ladybird_fd_release vex_web_fd_release
 #define ladybird_fd_dup_object vex_web_fd_dup_object
+#define ladybird_resolve_dirfd_path vex_web_resolve_dirfd_path
+#define ladybird_getdents64 vex_web_getdents64
 #define ladybird_posix_init vex_web_posix_init
 #define ladybird_connect_hostname vex_web_connect_hostname
 #define ladybird_display_open vex_web_display_open
@@ -380,6 +467,7 @@ const char *vex_web_browser_result_snippet(uint32_t index);
 #define ladybird_debug_log vex_web_debug_log
 #define ladybird_browser_yield_to_process vex_web_browser_yield_to_process
 #define ladybird_browser_process_pid vex_web_browser_process_pid
+#define ladybird_browser_parent_pid vex_web_browser_parent_pid
 #define ladybird_browser_command_push vex_web_browser_command_push
 #define ladybird_browser_command_pop vex_web_browser_command_pop
 #define ladybird_browser_results_begin vex_web_browser_results_begin

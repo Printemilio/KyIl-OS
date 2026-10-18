@@ -17,7 +17,6 @@
 #define INST_PATH_MAX 160u
 #define INST_MANIFEST_MAX 1024u
 #define INST_EXEC_READY 0
-#define INST_EXEC_PREPARED_PENDING -2
 #define FNV1A_OFFSET_BASIS 14695981039346656037ull
 #define FNV1A_PRIME 1099511628211ull
 
@@ -35,6 +34,8 @@
 #define PE_MACHINE_X86_64 0x8664u
 #define PE_OPTIONAL_MAGIC_PE32 0x10bu
 #define PE_OPTIONAL_MAGIC_PE32_PLUS 0x20bu
+#define ELF_PT_NOTE 4u
+#define VEXOS_NOTE_TYPE 1u
 
 typedef struct {
     uint8_t format;
@@ -47,6 +48,7 @@ typedef struct {
     uint32_t import_rva;
     uint32_t import_size;
     uint8_t has_interp;
+    uint8_t has_vex_note;
     uint64_t hash;
 } inst_binary_info_t;
 
@@ -159,14 +161,14 @@ static void print_hex64(uint64_t value) {
 }
 
 static uint16_t read_u16(const uint8_t *data, size_t size, size_t offset) {
-    if (offset + 2u > size) {
+    if (offset > size || size - offset < 2u) {
         return 0;
     }
     return (uint16_t)data[offset] | ((uint16_t)data[offset + 1u] << 8u);
 }
 
 static uint32_t read_u32(const uint8_t *data, size_t size, size_t offset) {
-    if (offset + 4u > size) {
+    if (offset > size || size - offset < 4u) {
         return 0;
     }
     return (uint32_t)data[offset] |
@@ -176,6 +178,7 @@ static uint32_t read_u32(const uint8_t *data, size_t size, size_t offset) {
 }
 
 static uint64_t read_u64(const uint8_t *data, size_t size, size_t offset) {
+    if(offset>size || size-offset<8u)return 0u;
     const uint64_t lo = read_u32(data, size, offset);
     const uint64_t hi = read_u32(data, size, offset + 4u);
     return lo | (hi << 32u);
@@ -274,17 +277,47 @@ static int analyze_elf64(const uint8_t *data, size_t size, inst_binary_info_t *o
     out->import_rva = 0u;
     out->import_size = 0u;
     out->has_interp = 0u;
+    out->has_vex_note = 0u;
 
     if (phoff != 0u && phentsize >= 56u && phnum != 0u && phoff < size) {
         for (uint16_t index = 0; index < phnum; ++index) {
             const uint64_t entry_offset = phoff + ((uint64_t)index * phentsize);
-            if (entry_offset + 4u > size) {
+            if (entry_offset < phoff || entry_offset > size ||
+                (uint64_t)phentsize > (uint64_t)size - entry_offset) {
                 break;
             }
 
-            if (read_u32(data, size, (size_t)entry_offset) == 3u) {
+            const uint32_t p_type = read_u32(data, size, (size_t)entry_offset);
+            if (p_type == 3u) {
                 out->has_interp = 1u;
-                break;
+            } else if (p_type == ELF_PT_NOTE && phentsize >= 56u) {
+                const uint64_t note_offset = read_u64(data, size, (size_t)entry_offset + 8u);
+                const uint64_t note_filesz = read_u64(data, size, (size_t)entry_offset + 32u);
+                if (note_offset <= size && note_filesz <= size - note_offset) {
+                    uint64_t cursor = note_offset;
+                    const uint64_t note_end = note_offset + note_filesz;
+                    while (cursor + 12u <= note_end) {
+                        const uint32_t namesz = read_u32(data, size, (size_t)cursor);
+                        const uint32_t descsz = read_u32(data, size, (size_t)cursor + 4u);
+                        const uint32_t type = read_u32(data, size, (size_t)cursor + 8u);
+                        const uint64_t name_start = cursor + 12u;
+                        const uint64_t name_advance = ((uint64_t)namesz + 3u) & ~3ull;
+                        const uint64_t desc_start = name_start + name_advance;
+                        const uint64_t desc_advance = ((uint64_t)descsz + 3u) & ~3ull;
+                        if (name_start > note_end || name_advance > note_end - name_start ||
+                            desc_start > note_end || desc_advance > note_end - desc_start) {
+                            break;
+                        }
+                        if (namesz >= 5u && descsz >= 4u && type == VEXOS_NOTE_TYPE &&
+                            data[name_start] == 'V' && data[name_start + 1u] == 'E' &&
+                            data[name_start + 2u] == 'X' && data[name_start + 3u] == 'O' &&
+                            data[name_start + 4u] == 'S' &&
+                            read_u32(data, size, (size_t)desc_start) == 0x5645584eu) {
+                            out->has_vex_note = 1u;
+                        }
+                        cursor = desc_start + desc_advance;
+                    }
+                }
             }
         }
     }
@@ -292,12 +325,12 @@ static int analyze_elf64(const uint8_t *data, size_t size, inst_binary_info_t *o
 }
 
 static int analyze_pe(const uint8_t *data, size_t size, inst_binary_info_t *out) {
-    if (size < 0x100u || data[0] != 'M' || data[1] != 'Z') {
+    if (size < 64u || data[0] != 'M' || data[1] != 'Z') {
         return -1;
     }
 
-    const uint32_t pe_offset = read_u32(data, size, 0x3cu);
-    if (pe_offset + 24u > size ||
+    const size_t pe_offset = read_u32(data, size, 0x3cu);
+    if (pe_offset > size || size - pe_offset < 24u ||
         data[pe_offset] != 'P' ||
         data[pe_offset + 1u] != 'E' ||
         data[pe_offset + 2u] != 0 ||
@@ -308,7 +341,7 @@ static int analyze_pe(const uint8_t *data, size_t size, inst_binary_info_t *out)
     const size_t coff = pe_offset + 4u;
     const uint16_t optional_size = read_u16(data, size, coff + 16u);
     const size_t optional = coff + 20u;
-    if (optional + optional_size > size || optional_size < 96u) {
+    if (optional > size || optional_size > size - optional || optional_size < 96u) {
         return -1;
     }
 
@@ -317,6 +350,7 @@ static int analyze_pe(const uint8_t *data, size_t size, inst_binary_info_t *out)
     if (magic != PE_OPTIONAL_MAGIC_PE32 && magic != PE_OPTIONAL_MAGIC_PE32_PLUS) {
         return -1;
     }
+    if(magic==PE_OPTIONAL_MAGIC_PE32_PLUS && optional_size<112u)return -1;
 
     out->format = INST_FMT_PE;
     out->machine = read_u16(data, size, coff);
@@ -326,8 +360,8 @@ static int analyze_pe(const uint8_t *data, size_t size, inst_binary_info_t *out)
         ? read_u64(data, size, optional + 24u)
         : read_u32(data, size, optional + 28u);
     out->subsystem = read_u16(data, size, optional + 68u);
-    out->import_rva = data_directory + 16u <= size ? read_u32(data, size, data_directory + 8u) : 0u;
-    out->import_size = data_directory + 16u <= size ? read_u32(data, size, data_directory + 12u) : 0u;
+    out->import_rva = data_directory + 16u <= optional + optional_size ? read_u32(data, size, data_directory + 8u) : 0u;
+    out->import_size = data_directory + 16u <= optional + optional_size ? read_u32(data, size, data_directory + 12u) : 0u;
     return 0;
 }
 
@@ -346,19 +380,21 @@ static int analyze_binary(const uint8_t *data, size_t size, inst_binary_info_t *
     out->import_rva = 0u;
     out->import_size = 0u;
     out->has_interp = 0u;
-    out->hash = fnv1a64(data, size);
+    out->has_vex_note = 0u;
+    /* The content hash is only shown (info, translation manifests): it is
+       computed there, not on every exec, where it cost full passes over
+       multi-megabyte binaries. */
+    out->hash = 0u;
 
     if (data == NULL || size == 0u) {
         return -1;
     }
 
     if (analyze_elf64(data, size, out) == 0) {
-        out->hash = fnv1a64(data, size);
         return 0;
     }
 
     if (analyze_pe(data, size, out) == 0) {
-        out->hash = fnv1a64(data, size);
         return 0;
     }
 
@@ -702,7 +738,7 @@ static void build_manifest(char *out, size_t capacity, const char *name, const i
     append_string(out, capacity, &length, "\nabi=");
     append_string(out, capacity, &length, info->format == INST_FMT_ELF64 ? "foreign-elf64" : "windows-pe");
     append_string(out, capacity, &length, "\ntranslation=");
-    append_string(out, capacity, &length, info->format == INST_FMT_ELF64 ? "linux-syscall-map-pending" : "pe-import-map");
+    append_string(out, capacity, &length, info->format == INST_FMT_ELF64 ? "linux-syscall-map-pending" : "userspace-pe-runtime");
     append_string(out, capacity, &length, "\nstatus=");
     append_string(out, capacity, &length, "prepared");
     append_string(out, capacity, &length, "\n");
@@ -751,11 +787,12 @@ static int prepare_package_for_path(const char *source_path, const char *name, c
 }
 
 static int info_path(const char *path) {
+    ora_view_t fs_lease_0 __attribute__((cleanup(ora_view_release)))={0};
     void *data = NULL;
     size_t size = 0;
     inst_binary_info_t info;
 
-    if (path == NULL || fs_read(path, &data, &size) != 0 || data == NULL) {
+    if (path == NULL || fs_read_view(path,&data,&size, &fs_lease_0) != 0 || data == NULL) {
         tty_puts("inst: file not found\n");
         return -1;
     }
@@ -764,6 +801,7 @@ static int info_path(const char *path) {
         tty_puts("inst: unsupported binary\n");
         return -1;
     }
+    info.hash = fnv1a64(data, size);
 
     tty_puts("path: ");
     tty_puts(path);
@@ -773,7 +811,7 @@ static int info_path(const char *path) {
     tty_putchar('\n');
     print_binary_info(&info);
     if (info.format == INST_FMT_PE) {
-        tty_puts("translation: PE parsed; imports must map to Vex ABI before execution\n");
+        tty_puts("PE: unchanged payload; imports are resolved by the native userspace Windows runtime\n");
     } else if (info.format == INST_FMT_ELF64) {
         tty_puts("translation: ELF parsed; foreign syscalls must map to Vex ABI before execution\n");
     }
@@ -781,6 +819,7 @@ static int info_path(const char *path) {
 }
 
 static int translate_path(const char *source_path, const char *name) {
+    ora_view_t fs_lease_1 __attribute__((cleanup(ora_view_release)))={0};
     void *data = NULL;
     size_t size = 0;
     inst_binary_info_t info;
@@ -790,7 +829,7 @@ static int translate_path(const char *source_path, const char *name) {
         return -1;
     }
 
-    if (fs_read(source_path, &data, &size) != 0 || data == NULL) {
+    if (fs_read_view(source_path,&data,&size, &fs_lease_1) != 0 || data == NULL) {
         tty_puts("inst: file not found\n");
         return -1;
     }
@@ -799,6 +838,7 @@ static int translate_path(const char *source_path, const char *name) {
         tty_puts("inst: unsupported binary\n");
         return -1;
     }
+    info.hash = fnv1a64(data, size);
 
     if (info.format == INST_FMT_ELF64) {
         if (info.machine != ELF_MACHINE_X86_64) {
@@ -806,7 +846,7 @@ static int translate_path(const char *source_path, const char *name) {
             return -1;
         }
 
-        tty_puts("inst: translating ELF -> VexOS ABI package\n");
+        tty_puts("inst: translating ELF -> KyIlOS ABI package\n");
         if (prepare_package_for_path(source_path, name, data, size, &info, 0) != 0) {
             tty_puts("inst: write failed\n");
             return -1;
@@ -822,13 +862,13 @@ static int translate_path(const char *source_path, const char *name) {
             return -1;
         }
 
-        tty_puts("inst: translating PE -> VexOS ABI package\n");
+        tty_puts("inst: packaging unchanged PE payload (no ELF conversion)\n");
         if (prepare_package_for_path(source_path, name, data, size, &info, 0) != 0) {
             tty_puts("inst: write failed\n");
             return -1;
         }
 
-        tty_puts("inst: PE package prepared; execution waits for PE import thunk runtime\n");
+        tty_puts("inst: PE package prepared for userspace Windows runtime; API coverage checked at load\n");
         return 0;
     }
 
@@ -837,10 +877,10 @@ static int translate_path(const char *source_path, const char *name) {
 }
 
 int inst_prepare_for_execution(const char *path, char *launch_path, size_t launch_path_capacity) {
+    ora_view_t fs_lease_2 __attribute__((cleanup(ora_view_release)))={0};
     void *data = NULL;
     size_t size = 0;
     inst_binary_info_t info;
-    char name[INST_MAX_FIELD];
 
     if (path == NULL || launch_path == NULL || launch_path_capacity == 0u) {
         return -1;
@@ -848,7 +888,7 @@ int inst_prepare_for_execution(const char *path, char *launch_path, size_t launc
 
     copy_string(launch_path, path, launch_path_capacity);
 
-    if (fs_read(path, &data, &size) != 0 || data == NULL) {
+    if (fs_read_view(path,&data,&size, &fs_lease_2) != 0 || data == NULL) {
         debug_log_puts("inst: fs_read failed ");
         debug_log_puts(path);
         debug_log_puts("\n");
@@ -862,41 +902,20 @@ int inst_prepare_for_execution(const char *path, char *launch_path, size_t launc
         return -1;
     }
 
-    if (info.format == INST_FMT_ELF64) {
+    if (info.format == INST_FMT_ELF64 ||
+        (info.format == INST_FMT_PE && info.machine == PE_MACHINE_X86_64)) {
         return INST_EXEC_READY;
     }
-
-    package_name_from_path(path, name, sizeof(name));
-    if (prepare_package_for_path(path, name, data, size, &info, 1) != 0) {
-        tty_puts("inst: automatic translation failed\n");
-        return -1;
-    }
-
-    tty_puts("inst: prepared ");
-    tty_puts(format_name(info.format));
-    tty_puts(" package for ");
-    tty_puts(path);
-    tty_putchar('\n');
-
-    if (info.format == INST_FMT_ELF64) {
-        return INST_EXEC_READY;
-    }
-
-    if (info.format == INST_FMT_PE) {
-        tty_puts("inst: PE execution waits for import thunk runtime\n");
-    } else {
-        tty_puts("inst: ELF execution waits for syscall thunk runtime\n");
-    }
-
-    return INST_EXEC_PREPARED_PENDING;
+    return -1;
 }
 
 uint8_t inst_abi_for_path(const char *path) {
+    ora_view_t fs_lease_3 __attribute__((cleanup(ora_view_release)))={0};
     void *data = NULL;
     size_t size = 0;
     inst_binary_info_t info;
 
-    if (path == NULL || fs_read(path, &data, &size) != 0 || data == NULL || analyze_binary(data, size, &info) != 0) {
+    if (path == NULL || fs_read_view(path,&data,&size, &fs_lease_3) != 0 || data == NULL || analyze_binary(data, size, &info) != 0) {
         return VEX_ABI_NATIVE;
     }
 
@@ -904,12 +923,19 @@ uint8_t inst_abi_for_path(const char *path) {
         return VEX_ABI_PE;
     }
 
-    if (info.format == INST_FMT_ELF64 &&
-        (!starts_with(path, "/home/root/bin/") || info.elf_type != 2u || info.has_interp != 0u)) {
-        return VEX_ABI_LINUX;
+    if (info.format == INST_FMT_ELF64) {
+        return info.has_vex_note != 0u ? VEX_ABI_NATIVE : VEX_ABI_LINUX;
     }
 
     return VEX_ABI_NATIVE;
+}
+
+int inst_abi_for_bytes(const void *data,size_t size) {
+    inst_binary_info_t info;
+    if(!data || analyze_binary(data,size,&info))return -1;
+    if(info.format==INST_FMT_PE)return VEX_ABI_PE;
+    if(info.format==INST_FMT_ELF64)return info.has_vex_note?VEX_ABI_NATIVE:VEX_ABI_LINUX;
+    return -1;
 }
 
 void inst_cleanup_for_path(const char *path) {

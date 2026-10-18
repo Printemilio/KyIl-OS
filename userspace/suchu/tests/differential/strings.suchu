@@ -1,0 +1,40 @@
+// '@' on a string concatenates, turning its right operand into text. That
+// conversion is the part worth pinning down: how a float prints, how none
+// prints, how a boolean prints.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun main() {
+  show("plain = ", "hello");
+  show("joined = ", "he" @ "llo");
+  show("int = ", "" @ 42);
+  show("negative = ", "" @ -42);
+  show("float = ", "" @ 1.5);
+  show("round float = ", "" @ 2.0);
+  show("small float = ", "" @ 0.5);
+  show("third = ", "" @ (1.0 / 3.0));
+  show("bool = ", "" @ true);
+  show("none = ", "" @ none);
+  show("empty = ", "" @ "");
+
+  // Chained concatenation, and a number on the left of the chain reached only
+  // through a string.
+  count = 3;
+  name = "boxes";
+  show("sentence = ", "there are " @ count @ " " @ name @ ".");
+
+  // Escapes survive the trip through the generated source, where they are
+  // written back out as an OCaml string literal.
+  print("tab:\there");
+  print("newline:\nhere");
+  print("quote:\"here\"");
+  print("backslash:\\here");
+
+  // '+' also joins strings, and must not be confused with addition.
+  show("plus = ", "a" + "b");
+  show("plus number = ", 1 + 2);
+}
+
+main();

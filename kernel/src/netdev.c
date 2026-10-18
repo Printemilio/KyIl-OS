@@ -1,4 +1,5 @@
 #include <unos/netdev.h>
+#include <unos/ethernet.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -7,6 +8,12 @@
 #include <unos/heap.h>
 #include <unos/pmm.h>
 #include <unos/vmm.h>
+#include <unos/hardware_resources.h>
+#include <unos/driver_vm.h>
+#include <unos/kernel_guard.h>
+#include <unos/network_state.h>
+#include <unos/irq.h>
+#include <string.h>
 
 #define PCI_CONFIG_ADDRESS 0xcf8u
 #define PCI_CONFIG_DATA 0xcfcu
@@ -110,7 +117,8 @@
 typedef enum {
     NETDEV_NONE,
     NETDEV_E1000,
-    NETDEV_VIRTIO
+    NETDEV_VIRTIO,
+    NETDEV_DRIVER
 } netdev_backend_t;
 
 typedef struct {
@@ -212,6 +220,13 @@ static uint8_t local_mac[6];
 static uint64_t next_mmio_virt = NET_MMIO_BASE;
 static e1000_state_t e1000;
 static virtio_state_t virtio;
+static kernel_gate_t netdev_gate=KERNEL_GATE_INIT;
+static netdev_driver_ops_t driver_ops;
+static void *driver_context;
+static pci_device_t native_device;
+static uint8_t native_irq_line=0xff;
+static int native_claimed;
+static uint64_t native_tx_calls,native_rx_calls,native_irq_calls;
 
 static inline uint8_t inb(uint16_t port) {
     uint8_t value;
@@ -302,10 +317,12 @@ static void ensure_local_mac(const char *source) {
 }
 
 static void *map_mmio(uint64_t phys, uint64_t length) {
+    if(hardware_native_mmio(phys,length)!=0)return NULL;
     const uint64_t phys_base = align_down(phys, PAGE_SIZE);
     const uint64_t phys_offset = phys - phys_base;
     const uint64_t mapped_length = align_up(length + phys_offset, PAGE_SIZE);
     const uint64_t virt_base = next_mmio_virt;
+    if(mapped_length>0x1000000u || virt_base>UINT64_C(0xffffffffb1000000)-mapped_length)return NULL;
 
     for (uint64_t offset = 0; offset < mapped_length; offset += PAGE_SIZE) {
         vmm_map_page(
@@ -314,6 +331,9 @@ static void *map_mmio(uint64_t phys, uint64_t length) {
             phys_base + offset,
             VMM_PAGE_PRESENT | VMM_PAGE_WRITABLE | VMM_PAGE_PWT | VMM_PAGE_PCD
         );
+        if(vmm_get_physical(current_pml4(),virt_base+offset)!=phys_base+offset) {
+            (void)vmm_unmap_kernel_range(virt_base,offset+PAGE_SIZE);return NULL;
+        }
     }
 
     next_mmio_virt += mapped_length;
@@ -321,25 +341,11 @@ static void *map_mmio(uint64_t phys, uint64_t length) {
 }
 
 static uint32_t pci_read32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset) {
-    const uint32_t address = 0x80000000u
-        | ((uint32_t)bus << 16u)
-        | ((uint32_t)device << 11u)
-        | ((uint32_t)function << 8u)
-        | (offset & 0xfcu);
-
-    outl(PCI_CONFIG_ADDRESS, address);
-    return inl(PCI_CONFIG_DATA);
+    return hardware_pci_read32(bus,device,function,offset);
 }
 
 static void pci_write32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value) {
-    const uint32_t address = 0x80000000u
-        | ((uint32_t)bus << 16u)
-        | ((uint32_t)device << 11u)
-        | ((uint32_t)function << 8u)
-        | (offset & 0xfcu);
-
-    outl(PCI_CONFIG_ADDRESS, address);
-    outl(PCI_CONFIG_DATA, value);
+    hardware_pci_write32(bus,device,function,offset,value);
 }
 
 static uint64_t pci_bar(pci_device_t device, uint8_t bar) {
@@ -358,10 +364,12 @@ static uint64_t pci_bar(pci_device_t device, uint8_t bar) {
     return low & ~0xfull;
 }
 
-static void pci_enable_bus_mastering(pci_device_t device) {
+static int pci_enable_bus_mastering(pci_device_t device) {
+    if(hardware_native_pci(device.bus,device.device,device.function)!=0)return -1;
     uint32_t command = pci_read32(device.bus, device.device, device.function, 0x04u);
     command |= 0x0006u;
     pci_write32(device.bus, device.device, device.function, 0x04u, command);
+    return 0;
 }
 
 static int pci_find_e1000(pci_device_t *out) {
@@ -532,30 +540,13 @@ static void short_io_delay(void) {
     }
 }
 
-static int e1000_wait_for_link(void) {
-    for (uint32_t i = 0; i < 1000000u; ++i) {
-        e1000_write(
-            E1000_CTRL,
-            e1000_read(E1000_CTRL) |
-                E1000_CTRL_FD |
-                E1000_CTRL_ASDE |
-                E1000_CTRL_SLU |
-                E1000_CTRL_SPEED_1000 |
-                E1000_CTRL_FRCSPD |
-                E1000_CTRL_FRCDPX
-        );
-        e1000_flush();
-        if ((e1000_read(E1000_STATUS) & E1000_STATUS_LU) != 0) {
-            return 0;
-        }
-        __asm__ volatile ("pause");
-    }
-
-    return -1;
-}
-
 static int e1000_init(pci_device_t device) {
-    pci_enable_bus_mastering(device);
+    if(pci_enable_bus_mastering(device)!=0)return -1;
+    native_device=device;native_claimed=1;
+    uint32_t irq_config=pci_read32(device.bus,device.device,device.function,0x3c);
+    uint8_t line=irq_config&255;
+    if(!(irq_config&0xff00) || hardware_claim_shared_irq(line,UINT64_MAX)!=0)return -1;
+    native_irq_line=line;
     e1000.mmio = map_mmio(pci_bar(device, 0), 0x20000u);
     if (e1000.mmio == NULL) {
         return -1;
@@ -573,7 +564,7 @@ static int e1000_init(pci_device_t device) {
             E1000_CTRL_FRCSPD |
             E1000_CTRL_FRCDPX
     );
-    const int link_result = e1000_wait_for_link();
+    /* Carrier is asynchronous; LSC IRQ wakes the network worker. */
     e1000_program_receive_address();
     e1000_clear_multicast_table();
 
@@ -640,7 +631,6 @@ static int e1000_init(pci_device_t device) {
     e1000_write(E1000_TDT, 0);
     e1000.tx_tail = 0;
 
-    (void)link_result;
 
     e1000_write(E1000_TIPG, 10u | (8u << 10u) | (6u << 20u));
     e1000_write(E1000_TCTL,
@@ -671,6 +661,7 @@ static int e1000_init(pci_device_t device) {
 }
 
 static int e1000_send(const void *data, size_t size) {
+    native_tx_calls++;
     if (size == 0 || size > ETH_FRAME_MAX) {
         return -1;
     }
@@ -693,16 +684,17 @@ static int e1000_send(const void *data, size_t size) {
     dma_barrier();
     e1000_write(E1000_TDT, e1000.tx_tail);
     e1000_flush();
-    for (uint32_t i = 0; i < 100000u; ++i) {
-        if ((desc->status & E1000_TDESC_STATUS_DD) != 0) {
-            return 0;
-        }
-    }
-
+    /* The descriptor is now owned by the device. Do not spin here: callers
+     * may be submitting a TCP congestion window, and waiting for each DMA
+     * completion serializes that window while ethernet_send has interrupts
+     * disabled. TXDW wakes the network worker, which retries when the ring
+     * has room. The frame was copied into this descriptor's buffer above, so
+     * the caller's storage may be reused as soon as this function returns. */
     return 0;
 }
 
 static int e1000_recv(void *buffer, size_t *size) {
+    native_rx_calls++;
     uint32_t index = e1000.rx_tail;
     volatile e1000_rx_desc_t *desc = &e1000.rx_desc[index];
 
@@ -790,7 +782,7 @@ static void virtio_post_rx_buffer(uint16_t id) {
 }
 
 static int virtio_init(pci_device_t device) {
-    pci_enable_bus_mastering(device);
+    if(pci_enable_bus_mastering(device)!=0)return -1;
     virtio.io_base = virtio_io_bar(device);
     if (virtio.io_base == 0) {
         return -1;
@@ -870,6 +862,7 @@ static int virtio_recv(void *buffer, size_t *size) {
 }
 
 void netdev_init(void) {
+    KERNEL_GUARD(netdev_gate);
     pci_device_t device;
 
     if (netdev_initialized) {
@@ -880,9 +873,11 @@ void netdev_init(void) {
     netdev_backend = NETDEV_NONE;
     if (pci_find_e1000(&device) == 0 && e1000_init(device) == 0) {
         netdev_backend = NETDEV_E1000;
+        irq_refresh_pic(native_irq_line);
         debug_log_puts("netdev: backend e1000\n");
         return;
     }
+    if(native_claimed && netdev_native_suspend()!=0){debug_log_puts("netdev: native init quarantined\n");return;}
 
     if (pci_find_virtio_net(&device) == 0 && virtio_init(device) == 0) {
         netdev_backend = NETDEV_VIRTIO;
@@ -894,6 +889,8 @@ void netdev_init(void) {
 }
 
 int netdev_link_up(void) {
+    KERNEL_GUARD(netdev_gate);
+    if(netdev_backend==NETDEV_DRIVER)return driver_ops.link(driver_context);
     if (netdev_backend == NETDEV_E1000) {
         return (e1000_read(E1000_STATUS) & E1000_STATUS_LU) != 0;
     }
@@ -906,6 +903,8 @@ int netdev_link_up(void) {
 }
 
 int netdev_send_frame(const void *data, size_t size) {
+    KERNEL_GUARD(netdev_gate);
+    if(netdev_backend==NETDEV_DRIVER)return driver_ops.send(driver_context,data,size);
     if (netdev_backend == NETDEV_E1000) {
         return e1000_send(data, size);
     }
@@ -918,16 +917,27 @@ int netdev_send_frame(const void *data, size_t size) {
 }
 
 void netdev_irq_handler(void) {
+    KERNEL_GUARD(netdev_gate);
+    ethernet_wake_irq();
+    if(netdev_backend==NETDEV_DRIVER){driver_ops.irq(driver_context);return;}
     if (netdev_backend == NETDEV_E1000) {
         (void)e1000_read(E1000_ICR);
+        native_irq_calls++;
         return;
     }
 }
+uint8_t netdev_pic_irq(void) {
+    unsigned backend=__atomic_load_n(&netdev_backend,__ATOMIC_ACQUIRE);
+    return backend==NETDEV_E1000?native_irq_line:
+        (backend==NETDEV_DRIVER || backend==NETDEV_VIRTIO)?11:0xff;
+}
 
 int netdev_recv_frame(void *buffer, size_t *size) {
+    KERNEL_GUARD(netdev_gate);
     if (buffer == NULL || size == NULL) {
         return -1;
     }
+    if(netdev_backend==NETDEV_DRIVER)return driver_ops.receive(driver_context,buffer,size);
 
     if (netdev_backend == NETDEV_E1000) {
         return e1000_recv(buffer, size);
@@ -945,6 +955,8 @@ const uint8_t *netdev_mac(void) {
 }
 
 const char *netdev_type(void) {
+    KERNEL_GUARD(netdev_gate);
+    if(netdev_backend==NETDEV_DRIVER)return "E1000.driver";
     if (netdev_backend == NETDEV_E1000) {
         return "E1000";
     }
@@ -953,10 +965,11 @@ const char *netdev_type(void) {
         return "virtio-net";
     }
 
-    return "aucun";
+    return "none";
 }
 
 void netdev_stats(netdev_stats_t *stats) {
+    KERNEL_GUARD(netdev_gate);
     if (stats == NULL) {
         return;
     }
@@ -974,6 +987,7 @@ void netdev_stats(netdev_stats_t *stats) {
     for (size_t i = 0; i < 4u; ++i) {
         stats->rx_descriptor_status[i] = 0;
     }
+    if(netdev_backend==NETDEV_DRIVER){driver_ops.stats(driver_context,stats);return;}
 
     if (netdev_backend == NETDEV_E1000) {
         stats->link_up = (e1000_read(E1000_STATUS) & E1000_STATUS_LU) != 0 ? 1u : 0u;
@@ -993,4 +1007,58 @@ void netdev_stats(netdev_stats_t *stats) {
             stats->rx_descriptor_status[i] = e1000.rx_desc[i].status;
         }
     }
+}
+int netdev_control_transaction(int (*fn)(void *),void *context) {
+    uint64_t flags=network_state_lock();
+    kernel_guard_t gate=kernel_guard_enter(&netdev_gate);
+    int e=fn(context);kernel_guard_leave(&gate);network_state_unlock(flags);return e;
+}
+int netdev_native_suspend(void) {
+    if(netdev_backend==NETDEV_DRIVER || netdev_backend==NETDEV_VIRTIO)return DRV_CONFLICT;
+    if(!native_claimed){netdev_backend=NETDEV_NONE;return 0;}
+    if(e1000.mmio) {
+        e1000_reset_controller();
+        uint64_t start=sched_clock_ns();
+        while(e1000_read(E1000_CTRL)&E1000_CTRL_RST) {
+            if(sched_clock_ns()-start>100000000)return DRV_TIMEOUT;
+            smp_relax();
+        }
+        if((e1000_read(E1000_RCTL)|e1000_read(E1000_TCTL))&2)return DRV_BUSY;
+    }
+    uint32_t cmd=pci_read32(native_device.bus,native_device.device,native_device.function,4)&65535;
+    pci_write32(native_device.bus,native_device.device,native_device.function,4,cmd&~7u);
+    (void)pci_read32(native_device.bus,native_device.device,native_device.function,4);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    uint64_t physical=pci_bar(native_device,0);
+    if(e1000.mmio && vmm_unmap_kernel_range((uint64_t)e1000.mmio&~4095ull,0x20000u))return DRV_BUSY;
+    hardware_release(HW_MMIO,physical,0x20000u,UINT64_MAX);
+    for(unsigned i=0;i<32;i++) {
+        if(e1000.rx_buffers_phys[i])pmm_free_page((void *)e1000.rx_buffers_phys[i]);
+        if(e1000.tx_buffers_phys[i])pmm_free_page((void *)e1000.tx_buffers_phys[i]);
+    }
+    if(e1000.rx_desc_phys)pmm_free_page((void *)e1000.rx_desc_phys);
+    if(e1000.tx_desc_phys)pmm_free_page((void *)e1000.tx_desc_phys);
+    hardware_release(HW_PCI,((uint64_t)native_device.bus<<8)|(native_device.device<<3)|native_device.function,1,UINT64_MAX);
+    if(native_irq_line!=0xff)hardware_release(HW_IRQ,native_irq_line,1,UINT64_MAX);
+    uint8_t old_irq=native_irq_line;native_irq_line=0xff;
+    memset(&e1000,0,sizeof(e1000));native_claimed=0;next_mmio_virt=NET_MMIO_BASE;netdev_backend=NETDEV_NONE;
+    if(old_irq!=0xff)irq_refresh_pic(old_irq);return 0;
+}
+int netdev_native_resume(void) {
+    if(netdev_backend!=NETDEV_NONE)return DRV_CONFLICT;
+    netdev_initialized=0;netdev_init();
+    if(netdev_backend==NETDEV_NONE)return DRV_NOT_BOUND;
+    irq_refresh_pic(netdev_pic_irq());ethernet_wake();return 0;
+}
+int netdev_driver_install(const netdev_driver_ops_t *ops,void *context,const uint8_t mac[6]) {
+    if(netdev_backend!=NETDEV_NONE || !ops || !context)return DRV_CONFLICT;
+    driver_ops=*ops;driver_context=context;memcpy(local_mac,mac,6);
+    netdev_backend=NETDEV_DRIVER;netdev_initialized=1;return 0;
+}
+int netdev_driver_detach(void *context) {
+    if(netdev_backend!=NETDEV_DRIVER || driver_context!=context)return DRV_NOT_BOUND;
+    netdev_backend=NETDEV_NONE;driver_context=NULL;memset(&driver_ops,0,sizeof(driver_ops));return 0;
+}
+void netdev_native_counters(uint64_t out[3]) {
+    KERNEL_GUARD(netdev_gate);out[0]=native_tx_calls;out[1]=native_rx_calls;out[2]=native_irq_calls;
 }

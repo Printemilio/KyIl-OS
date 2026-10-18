@@ -1,0 +1,115 @@
+// Floats kept unboxed, and the places where that must not change an answer.
+// Division is the awkward one: it leaves the integers even when both sides are
+// in them, so a variable fed by '/' is a float however it started.
+
+fun show(label, value) {
+  print(label @ value);
+}
+
+fun main() {
+  // Plainly a float and stays one.
+  x = 1.5;
+  y = 0.25;
+  show("x + y = ", x + y);
+  show("x - y = ", x - y);
+  show("x * y = ", x * y);
+  show("x / y = ", x / y);
+  show("-x = ", -x);
+  show("its type is ", type(x));
+
+  // An integer mixed in is widened, exactly as the boxed operators widen it.
+  n = 3;
+  show("x + n = ", x + n);
+  show("n + x = ", n + x);
+  show("n * x = ", n * x);
+  show("type of x + n = ", type(x + n));
+
+  // Division always gives a float, so this is one from the start.
+  half = 7 / 2;
+  show("7 / 2 = ", half);
+  show("its type is ", type(half));
+  whole = 6 / 3;
+  show("6 / 3 = ", whole);
+  show("its type is ", type(whole));
+
+  // A variable that begins as an integer and is later divided is a float
+  // throughout, since the analysis speaks for the whole block.
+  drifting = 10;
+  drifting = drifting / 4;
+  show("drifting = ", drifting);
+  show("its type is ", type(drifting));
+
+  // Accumulating in a loop, which is where the unboxing pays.
+  total = 0.0;
+  i = 0;
+  while (i < 10) {
+    total = total + 0.5;
+    i = i + 1;
+  }
+  show("accumulated = ", total);
+
+  // The awkward values have to print and compare as they always did.
+  show("0.1 + 0.2 = ", 0.1 + 0.2);
+  show("1.0 / 3.0 = ", 1.0 / 3.0);
+  show("2.0 = ", 2.0);
+  show("-0.0 = ", -0.0);
+  show("0.0 = ", 0.0);
+  show("-0.0 == 0.0 = ", -0.0 == 0.0);
+  show("-0.0 < 0.0 = ", -0.0 < 0.0);
+
+  zero = 0.0;
+  show("1.0 / zero = ", 1.0 / zero);
+  show("-1.0 / zero = ", -1.0 / zero);
+  show("zero / zero = ", zero / zero);
+  show("nan == nan = ", nan == nan);
+  show("nan < 1.0 = ", nan < 1.0);
+  show("nan >= 1.0 = ", nan >= 1.0);
+  show("inf > 1.0 = ", inf > 1.0);
+
+  // Comparisons between a float variable and other things.
+  f = 2.5;
+  show("f < 3 = ", f < 3);
+  show("f > 2 = ", f > 2);
+  show("f == 2.5 = ", f == 2.5);
+  show("f == 2 = ", f == 2);
+  m = 2.0;
+  show("m == 2 = ", m == 2);
+
+  // Boxed again at every edge.
+  show("in a list = ", [f, f * 2.0]);
+  show("in a record = ", { value: f; });
+  show("concatenated = ", "f is " @ f);
+  show("passed to a builtin = ", abs(-f));
+  show("rounded = ", round(f));
+  show("square root = ", sqrt(f));
+
+  // Stepping a float.
+  step = 1.5;
+  show("step++ gave ", step++);
+  show("step is now ", step);
+  show("step-- gave ", step--);
+  show("step is now ", step);
+
+  // Modulo refuses floats, so a variable it feeds is never one.
+  try { show("never printed ", f % 2); } else e { show("caught: ", e.message); }
+
+  // A power leaves the integers when it overflows, so it is not specialised.
+  raised = 2.0 ** 3.0;
+  show("2.0 ** 3.0 = ", raised);
+  show("its type is ", type(raised));
+
+  // In a function, with its own locals.
+  show("average = ", average([1, 2, 3, 4]));
+}
+
+fun average(values) {
+  total = 0.0;
+  count = 0;
+  for (value in values) {
+    total = total + value;
+    count = count + 1;
+  }
+  return total / count;
+}
+
+main();

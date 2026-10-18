@@ -5,16 +5,10 @@
 #include <string.h>
 #include <time.h>
 #include <unos/heap.h>
+#include <unos/memory_copy.h>
 
 void *memcpy(void *dest, const void *src, size_t n) {
-    uint8_t *d = dest;
-    const uint8_t *s = src;
-
-    for (size_t i = 0; i < n; ++i) {
-        d[i] = s[i];
-    }
-
-    return dest;
+    return kyil_memory_copy(dest,src,n);
 }
 
 void *memmove(void *dest, const void *src, size_t n) {
@@ -35,12 +29,15 @@ void *memmove(void *dest, const void *src, size_t n) {
 }
 
 void *memset(void *s, int c, size_t n) {
+    /* No SIMD/FPU state belongs to kernel memory primitives. REP stores also
+     * avoid the scalar byte loop on large page/backing initialisations. x86
+     * permits unaligned stores; the tail never touches bytes outside [s,s+n). */
     uint8_t *bytes = s;
-
-    for (size_t i = 0; i < n; ++i) {
-        bytes[i] = (uint8_t)c;
-    }
-
+    const uint64_t value = UINT64_C(0x0101010101010101) * (uint8_t)c;
+    size_t words = n / sizeof(value);
+    size_t tail = n % sizeof(value);
+    __asm__ volatile("cld; rep stosq" : "+D"(bytes), "+c"(words) : "a"(value) : "memory", "cc");
+    __asm__ volatile("rep stosb" : "+D"(bytes), "+c"(tail) : "a"((uint8_t)c) : "memory");
     return s;
 }
 

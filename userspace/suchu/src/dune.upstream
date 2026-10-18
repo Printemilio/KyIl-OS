@@ -1,0 +1,74 @@
+; Lexer, parser, runtime values and the native standard library.
+; Carries no GUI dependency.
+(library
+ (name suchu_core)
+ (public_name suchu.core)
+ (wrapped false)
+ (modules lexical ast parser_utils gui_parser parser gui_tree runtime native_api suchu_stdlib http_wire audio_analysis transpiler util)
+ (libraries unix)
+ (flags :standard -w -27-26))
+
+; The evaluator. Deliberately GUI-free so it can also be compiled to JavaScript
+; with js_of_ocaml for the web playground; the desktop GUI is installed at
+; runtime by Gui_backend through Interpreter.gui_hook.
+(library
+ (name suchu_eval)
+ (public_name suchu.eval)
+ (wrapped false)
+ (modules interpreter)
+ (libraries suchu_core)
+ (flags :standard -w -27-26))
+
+; The typeface, turned into an OCaml module so it travels inside the binary
+; rather than being looked up on the target machine.
+(rule
+ (targets fonts_data.ml)
+ (deps
+  (:generator %{exe:../tools/embed_fonts.exe})
+  (:regular %{project_root}/assets/fonts/LiberationSans-Regular.ttf)
+  (:bold %{project_root}/assets/fonts/LiberationSans-Bold.ttf)
+  (:mono %{project_root}/assets/fonts/LiberationMono-Regular.ttf))
+ (action
+  (with-stdout-to
+   fonts_data.ml
+   (run %{generator} %{regular} %{bold} %{mono}))))
+
+; The libraries the Windows dialogs (suchu_dialog_stubs.c) call into. Linking them
+; anywhere else would be an error, so they are only named on Windows.
+(rule
+ (targets dialog_flags.sexp)
+ (enabled_if
+  (= %{os_type} Win32))
+ (action
+  (with-stdout-to
+   dialog_flags.sexp
+   (echo "(-lole32 -lshell32 -lcomdlg32 -luuid)"))))
+
+(rule
+ (targets dialog_flags.sexp)
+ (enabled_if
+  (<> %{os_type} Win32))
+ (action
+  (with-stdout-to
+   dialog_flags.sexp
+   (echo "()"))))
+
+; Desktop distribution: the raylib GUI backend plus the CLI driver.
+(library
+ (name suchu)
+ (public_name suchu)
+ (modules gui_backend http_backend audio_backend cli fonts_data)
+ (libraries suchu_eval raylib ctypes tls ca-certs mirage-crypto-rng.unix
+  domain-name ipaddr)
+ (foreign_stubs
+  (language c)
+  (names suchu_dwm_stubs suchu_path_stubs suchu_dialog_stubs))
+ (c_library_flags
+  (:include dialog_flags.sexp))
+ (flags :standard -w -27-26))
+
+(executable
+ (name suchu_cli)
+ (public_name suchu-cli)
+ (modules suchu_cli)
+ (libraries suchu))

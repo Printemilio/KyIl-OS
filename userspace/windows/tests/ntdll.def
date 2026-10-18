@@ -1,0 +1,20 @@
+LIBRARY NTDLL.dll
+EXPORTS
+NtQueryInformationProcess
+NtQueryObject
+RtlGetLastNtStatus
+RtlNtStatusToDosError
+RtlSetLastWin32ErrorAndNtStatusFromNtStatus
+NtClose
+RtlInitUnicodeString
+RtlInitUnicodeStringEx
+RtlFreeUnicodeString
+__C_specific_handler
+RtlRestoreContext
+NtCreateKey
+NtOpenKey
+NtOpenKeyEx
+NtDeleteKey
+NtSetValueKey
+NtQueryValueKey
+RtlFormatCurrentUserKeyPath

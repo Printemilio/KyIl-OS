@@ -1,0 +1,403 @@
+{
+  "format": 1,
+  "name": "uart-16550",
+  "platform": "uart.com2",
+  "bus": "platform",
+  "class": "character",
+  "priority": 100,
+  "features": [
+    "base",
+    "pio",
+    "irq"
+  ],
+  "irq": 3,
+  "resources": [
+    {
+      "kind": "pio",
+      "length": 8,
+      "rights": [
+        "read",
+        "write"
+      ],
+      "widths": 1
+    }
+  ],
+  "entries": {
+    "probe": [
+      {
+        "op": "read",
+        "dst": 1,
+        "b": 1,
+        "aux": 0,
+        "imm": 7
+      },
+      {
+        "op": "const",
+        "dst": 2,
+        "imm": 85
+      },
+      {
+        "op": "write",
+        "a": 2,
+        "b": 1,
+        "aux": 0,
+        "imm": 7
+      },
+      {
+        "op": "read",
+        "dst": 3,
+        "b": 1,
+        "aux": 0,
+        "imm": 7
+      },
+      {
+        "op": "write",
+        "a": 1,
+        "b": 1,
+        "aux": 0,
+        "imm": 7
+      },
+      {
+        "op": "eq",
+        "dst": 4,
+        "a": 2,
+        "b": 3
+      },
+      {
+        "op": "jnz",
+        "a": 4,
+        "target": "valid"
+      },
+      {
+        "op": "ret",
+        "imm": -12
+      },
+      {
+        "label": "valid"
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "init": [
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 1
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 131
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 3
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 0
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 1
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 3
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 3
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 7
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 2
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 11
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 4
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 1
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 1
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "stop": [
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 1
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 0
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 4
+      },
+      {
+        "op": "read",
+        "dst": 1,
+        "b": 1,
+        "aux": 0,
+        "imm": 2
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "write": [
+      {
+        "label": "ready"
+      },
+      {
+        "op": "read",
+        "dst": 1,
+        "b": 1,
+        "aux": 0,
+        "imm": 5
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 32
+      },
+      {
+        "op": "and",
+        "dst": 1,
+        "a": 1,
+        "b": 30
+      },
+      {
+        "op": "jz",
+        "a": 1,
+        "target": "ready"
+      },
+      {
+        "op": "write",
+        "a": 0,
+        "b": 1,
+        "aux": 0,
+        "imm": 0
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "irq": [
+      {
+        "op": "read",
+        "dst": 1,
+        "b": 1,
+        "aux": 0,
+        "imm": 2
+      },
+      {
+        "label": "drain"
+      },
+      {
+        "op": "read",
+        "dst": 2,
+        "b": 1,
+        "aux": 0,
+        "imm": 5
+      },
+      {
+        "op": "const",
+        "dst": 30,
+        "imm": 1
+      },
+      {
+        "op": "and",
+        "dst": 2,
+        "a": 2,
+        "b": 30
+      },
+      {
+        "op": "jz",
+        "a": 2,
+        "target": "done"
+      },
+      {
+        "op": "read",
+        "dst": 3,
+        "b": 1,
+        "aux": 0,
+        "imm": 0
+      },
+      {
+        "op": "emit",
+        "a": 3
+      },
+      {
+        "op": "jmp",
+        "target": "drain"
+      },
+      {
+        "label": "done"
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "control": [
+      {
+        "op": "jz",
+        "a": 0,
+        "target": "normal"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 27
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 4
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      },
+      {
+        "label": "normal"
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 11
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 4
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ],
+    "diagnostic": [
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 131
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 3
+      },
+      {
+        "op": "read",
+        "dst": 8,
+        "b": 1,
+        "aux": 0,
+        "imm": 0
+      },
+      {
+        "op": "const",
+        "dst": 31,
+        "imm": 3
+      },
+      {
+        "op": "write",
+        "a": 31,
+        "b": 1,
+        "aux": 0,
+        "imm": 3
+      },
+      {
+        "op": "ret",
+        "imm": 0
+      }
+    ]
+  },
+  "info": {
+    "hardware": "16550 UART, COM2 0x2f8 IRQ3, 115200 8N1, FIFO, RX interrupt",
+    "source": "https://www.ti.com/lit/gpn/TL16C550D",
+    "control": "0 normal, 1 hardware loopback; diagnostic reads baud divisor"
+  }
+}

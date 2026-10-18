@@ -1,0 +1,46 @@
+// Style inheritance: set the text properties once, override where needed.
+// Exactly your example, typo included, so the warning shows up on stderr.
+
+Window("Inheritance", 460px, 340px) {
+  background: #0f172a;
+  layout: column;
+  padding: 24px;
+  spacing: 16px;
+
+  // Everything below inherits this colour and size.
+  color: #e2e8f0;
+  font-size: 14px;
+
+  Column {
+    background: #1e293b;
+    padding: 16px;
+    spacing: 8px;
+    border-radius: 8px;
+
+    // Inherited from the Window.
+    Label { text: "A - inherits #e2e8f0 at 14px"; }
+
+    // The size is misspelt on purpose. An unknown property is ignored and
+    // reported on stderr rather than refused, so a typo costs a warning and the
+    // inherited value rather than a dead program.
+    Label { text: "B - own colour, misspelt size ignored"; color: #f59e0b; fint-size: 18px; }
+
+    Label { text: "C - inherits again"; }
+  }
+
+  // A nested container can re-set them for its own subtree.
+  Column {
+    background: #1e293b;
+    padding: 16px;
+    spacing: 8px;
+    border-radius: 8px;
+    color: #7dd3fc;
+    font-size: 18px;
+
+    Label { text: "D - this Column re-set both"; }
+    Label { text: "E - and its neighbour follows"; }
+  }
+
+  // Buttons inherit the text properties too.
+  Button { text: "Inherits 14px"; background: #3b82f6; }
+}

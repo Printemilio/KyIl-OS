@@ -1,0 +1,152 @@
+// Paths, listing, copy/move/rename policy and rollback belong to Suchu.
+// fileio only supplies real filesystem primitives; it knows no GFM actions.
+import files; import fileio; import textbytes;
+fun fail(message) { textbytes.fail(message); }
+fun whole(n) { return round(floor(n)); }
+fun resolve(cwd, input) {
+  if input.contains(textbytes.character(0)) { fail("NUL in path"); }
+  path=if input.startswith("/") then input else cwd @ "/" @ input;
+  parts=[];
+  for part in path.split("/") {
+    if part!="" && part!="." {
+      if part==".." { if len(parts)>0 { parts.pop(); } }
+      else { push(parts,part); }
+    }
+  }
+  result="/" @ "/".join(parts);
+  if len(result)>127 { fail("Path exceeds VexFS's 127-byte limit"); }
+  return result;
+}
+fun name(input) {
+  value=input.trim();
+  if value=="" || value=="." || value==".." || len(value)>64 || value.contains("/") || value.contains(textbytes.character(0)) { fail("Invalid name (maximum 64 bytes)"); }
+  for i in 0..(len(value)-1) { if textbytes.byte(value,i)<32 { fail("Control character in name"); } }
+  return value;
+}
+fun join(path, child) { return resolve(path,name(child)); }
+fun parent(path) { return resolve(path,".."); }
+fun basename(path) { if path=="/" { return "/"; } parts=path.split("/"); return parts[len(parts)-1]; }
+fun within(path, ancestor) { return path==ancestor || ancestor=="/" || path.startswith(ancestor @ "/"); }
+fun transient(value) { return value.endswith(".part") || value.endswith(".download"); }
+fun executable(mode) { return mode%2==1 || whole(mode/8)%2==1 || whole(mode/64)%2==1; }
+fun list(path) {
+  if !files.is_directory(path) { fail("Not a directory: " @ path); }
+  dirs=[]; others=[];
+  for n in files.list(path) {
+    if n!=".ladybird_dir" {
+      full=resolve(path,n); s=fileio.stat(full);
+      entry={name:n; path:full; kind:s[0]; size:s[1]; mode:s[2]; uid:s[3]; gid:s[4];};
+      group=if s[0]=="directory" then dirs else others;
+      // Stable ASCII-insensitive ordering, preserving the original spelling.
+      at=0; while at<len(group) && group[at].name.lower()<=n.lower() { at=at+1; }
+      insert(group,at,entry);
+    }
+  }
+  for entry in others { push(dirs,entry); }
+  return dirs;
+}
+fun create(cwd, child) {
+  path=join(cwd,child); if fileio.exists(path) { fail("Already exists: " @ path); }
+  fileio.mkdir(path,493); return path;
+}
+fun close_quiet(fd) { if fd!=none { try { fileio.close(fd); } else error {} } }
+fun copy_file(source,target,mode) {
+  input=none; output=none; created=false;
+  try {
+    input=fileio.open(source,"r"); output=fileio.open(target,"x"); created=true;
+    while true { bytes=fileio.read(input,65536); if len(bytes)==0 { break; } fileio.write(output,bytes); }
+    fileio.sync(output); fileio.close(output); output=none;
+    fileio.close(input); input=none; fileio.chmod(target,mode);
+  } else error {
+    close_quiet(input); close_quiet(output);
+    if created { try { fileio.remove(target); } else cleanup { fail(error.message @ "; partial copy remains at " @ target @ ": " @ cleanup.message); } }
+    fail(error.message);
+  }
+}
+fun erase_tree(path,depth) {
+  if depth>8 { fail("Tree exceeds eight levels; nothing beyond that depth removed"); }
+  s=fileio.stat(path);
+  if s[0]=="directory" {
+    for n in files.list(path) { if n!=".ladybird_dir" { erase_tree(resolve(path,n),depth+1); } }
+    fileio.rmdir(path);
+  } else { fileio.remove(path); }
+}
+fun erase(path) { if path=="/" || !path.startswith("/") { fail("Refusing to remove root/relative path"); } if fileio.stat(path)[0]=="directory" { count(path,0); } erase_tree(path,0); }
+fun copy_tree(source,target,depth) {
+  if depth>8 { fail("Tree exceeds eight copy levels"); }
+  s=fileio.stat(source);
+  if s[0]=="link" { fileio.symlink(fileio.readlink(source),target); return; }
+  if s[0]=="file" { copy_file(source,target,s[2]); return; }
+  if s[0]!="directory" { fail("Unsupported filesystem object: " @ source); }
+  fileio.mkdir(target,448);
+  try {
+    for n in files.list(source) { if n!=".ladybird_dir" { copy_tree(resolve(source,n),resolve(target,n),depth+1); } }
+    fileio.chmod(target,s[2]);
+  } else error {
+    try { erase_tree(target,0); } else cleanup { fail(error.message @ "; partial tree remains at " @ target @ ": " @ cleanup.message); }
+    fail(error.message);
+  }
+}
+fun validate_destination(source,target) {
+  if source=="/" || within(target,source) { fail("Cannot copy/move a directory into itself"); }
+  if fileio.exists(target) { fail("Destination exists: " @ target); }
+}
+fun unique(cwd, original) {
+  target=resolve(cwd,original); if !fileio.exists(target) { return target; }
+  suffix=1;
+  while suffix<=9999 {
+    candidate=original @ " copy" @ (if suffix==1 then "" else " " @ suffix);
+    target=resolve(cwd,candidate); if !fileio.exists(target) { return target; }
+    suffix=suffix+1;
+  }
+  fail("No free copy name");
+}
+fun copy(source,directory) {
+  directory=resolve("/",directory);
+  if within(directory,source) { fail("Cannot copy into source tree"); }
+  target=unique(directory,basename(source)); validate_destination(source,target);
+  copy_tree(source,target,0); return target;
+}
+fun move_to(source,target) {
+  validate_destination(source,target);
+  if fileio.stat(source)[0]=="directory" {
+    copy_tree(source,target,0);
+    try { erase(source); } else error { fail("Destination complete at " @ target @ "; source removal failed: " @ error.message); }
+  } else { fileio.rename(source,target); }
+  return target;
+}
+fun move(source,directory) { return move_to(source,resolve(directory,basename(source))); }
+fun rename(source,new_name) { return move_to(source,join(parent(source),new_name)); }
+fun count(path,depth) {
+  if depth>8 { fail("Tree exceeds eight counting levels"); }
+  result=0;
+  for n in files.list(path) {
+    if n!=".ladybird_dir" {
+      child=resolve(path,n); result=result+1;
+      if fileio.stat(child)[0]=="directory" { result=result+count(child,depth+1); }
+    }
+  }
+  return result;
+}
+fun toggle_executable(path) {
+  s=fileio.stat(path); if s[0]!="file" { fail("Only regular files have executable permissions here"); }
+  mode=s[2]; active=executable(mode); changed=mode;
+  for bit in [1,8,64] { present=whole(mode/bit)%2==1; if active && present { changed=changed-bit; } if !active && !present { changed=changed+bit; } }
+  fileio.chmod(path,changed);
+}
+fun binary(path) {
+  fd=fileio.open(path,"r"); result=false;
+  try { bytes=fileio.read(fd,1024); result=bytes.contains(textbytes.character(0)); fileio.close(fd); }
+  else error { close_quiet(fd); fail(error.message); }
+  return result;
+}
+fun size_text(bytes) {
+  if bytes<1024 { return "" @ bytes @ " B"; }
+  if bytes<1048576 { return "" @ (whole(bytes/102.4)/10) @ " KiB"; }
+  return "" @ (whole(bytes/104857.6)/10) @ " MiB";
+}
+fun mode_text(mode) {
+  result=""; for pair in [[256,"r"],[128,"w"],[64,"x"],[32,"r"],[16,"w"],[8,"x"],[4,"r"],[2,"w"],[1,"x"]] {
+    result=result @ (if whole(mode/pair[0])%2==1 then pair[1] else "-");
+  } return result;
+}

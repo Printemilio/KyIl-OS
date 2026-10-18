@@ -1,0 +1,42 @@
+// lower, upper, trim and contains. The first two change letters A to Z and nothing
+// else: a string is bytes, and an accented letter is two of them that no one-byte
+// rule can map, so it is left exactly as it was rather than mangled.
+
+fun show(label, value) {
+  print(label @ "[" @ value @ "]");
+}
+
+fun main() {
+  show("lower        ", "Hello WORLD 42".lower());
+  show("upper        ", "Hello world 42".upper());
+  show("accents stay ", "Café ÉTÉ".lower());
+  show("and these    ", "Café été".upper());
+  show("empty        ", "".lower());
+
+  show("trim         ", "  padded \t\n".trim());
+  show("trim nothing ", "tight".trim());
+  show("trim all     ", "   ".trim());
+
+  print("contains an inside word: " @ "A Song About Nothing".contains("About"));
+  print("contains is exact case:  " @ "A Song About Nothing".contains("about"));
+  print("contains at the start:   " @ "starting".contains("star"));
+  print("contains at the end:     " @ "ending".contains("ing"));
+  print("contains the empty one:  " @ "anything".contains(""));
+  print("contains something longer: " @ "ab".contains("abc"));
+  print("contains an accent:      " @ "Café del Mar".contains("é"));
+
+  // The point of them together: a search that ignores case.
+  names = ["Blue Hour", "blue monday", "Red Sky", "Navy BLUE"];
+  found = [];
+  for name in names {
+    if name.lower().contains("blue".lower()) {
+      push(found, name);
+    }
+  }
+  print(found);
+
+  // Methods chain.
+  show("chained      ", "  MiXeD  ".trim().lower());
+}
+
+main();

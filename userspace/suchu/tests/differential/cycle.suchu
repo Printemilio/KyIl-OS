@@ -1,0 +1,8 @@
+// A cycle in the import graph. The evaluator finds it while running; the
+// compiler finds it while translating and leaves behind something that raises
+// the same sentence when the program reaches for the module. Either way the
+// program says so and stops.
+
+print("before the import");
+import "modules/cycle_a.suchu";
+print("this must not print", cycle_a.value);

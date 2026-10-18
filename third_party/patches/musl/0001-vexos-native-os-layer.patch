@@ -1,0 +1,1687 @@
+diff --git a/crt/crt1.c b/crt/crt1.c
+index 8fe8ab5..78e7e4f 100644
+--- a/crt/crt1.c
++++ b/crt/crt1.c
+@@ -5,6 +5,21 @@
+ 
+ #include "crt_arch.h"
+ 
++/* Vex: the loader recognises a program built for the native Vex ABI by this
++ * ELF note rather than by its path; any other ELF is a foreign (Linux)
++ * program. The layout matches userspace/libvex/src/crt0.c. */
++__asm__(
++".section .note.vexos,\"a\",@note\n"
++".balign 4\n"
++".long 6\n"           /* namesz: "VEXOS" and its NUL */
++".long 4\n"           /* descsz */
++".long 1\n"           /* type: native ABI */
++".asciz \"VEXOS\"\n"
++".balign 4\n"
++".long 0x5645584e\n"
++".text\n"
++);
++
+ int main();
+ weak void _init();
+ weak void _fini();
+diff --git a/src/conf/sysconf.c b/src/conf/sysconf.c
+index 60d3e74..347e807 100644
+--- a/src/conf/sysconf.c
++++ b/src/conf/sysconf.c
+@@ -201,12 +201,9 @@ long sysconf(int name)
+ 		return DELAYTIMER_MAX;
+ 	case JT_NPROCESSORS_CONF & 255:
+ 	case JT_NPROCESSORS_ONLN & 255: ;
+-		unsigned char set[128] = {1};
+-		int i, cnt;
+-		__syscall(SYS_sched_getaffinity, 0, sizeof set, set);
+-		for (i=cnt=0; i<sizeof set; i++)
+-			for (; set[i]; set[i]&=set[i]-1, cnt++);
+-		return cnt;
++		/* Vex: the kernel reports the CPUs FlowSched runs on. */
++		long cnt = (long)__vex_call1(VEX_SYS_SYSCONF, _SC_NPROCESSORS_ONLN);
++		return cnt > 0 ? cnt : 1;
+ 	case JT_PHYS_PAGES & 255:
+ 	case JT_AVPHYS_PAGES & 255: ;
+ 		unsigned long long mem;
+diff --git a/src/dirent/opendir.c b/src/dirent/opendir.c
+index 5cb84e3..6ae753b 100644
+--- a/src/dirent/opendir.c
++++ b/src/dirent/opendir.c
+@@ -13,7 +13,7 @@ DIR *opendir(const char *name)
+ 	if ((fd = open(name, O_RDONLY|O_DIRECTORY|O_CLOEXEC)) < 0)
+ 		return 0;
+ 	if (!(dir = calloc(1, sizeof *dir))) {
+-		__syscall(SYS_close, fd);
++		__vex_sys_close(fd);
+ 		return 0;
+ 	}
+ 	dir->fd = fd;
+diff --git a/src/dirent/readdir.c b/src/dirent/readdir.c
+index 5a03b36..dedf7c3 100644
+--- a/src/dirent/readdir.c
++++ b/src/dirent/readdir.c
+@@ -12,7 +12,9 @@ struct dirent *readdir(DIR *dir)
+ 	struct dirent *de;
+ 	
+ 	if (dir->buf_pos >= dir->buf_end) {
+-		int len = __syscall(SYS_getdents, dir->fd, dir->buf, sizeof dir->buf);
++		/* Vex: native vex_dirent_t records share struct dirent's layout. */
++		vex_getdents_req_t req = { .fd = dir->fd, .buffer = dir->buf, .size = sizeof dir->buf };
++		int len = (int)(int64_t)__vex_call1(VEX_SYS_GETDENTS, __vex_ptr(&req));
+ 		if (len <= 0) {
+ 			if (len < 0 && len != -ENOENT) errno = -len;
+ 			return 0;
+diff --git a/src/env/__init_tls.c b/src/env/__init_tls.c
+index a93141e..09c29c2 100644
+--- a/src/env/__init_tls.c
++++ b/src/env/__init_tls.c
+@@ -15,11 +15,10 @@ int __init_tp(void *p)
+ {
+ 	pthread_t td = p;
+ 	td->self = td;
+-	int r = __set_thread_area(TP_ADJ(p));
+-	if (r < 0) return -1;
+-	if (!r) libc.can_do_threads = 1;
++	if (__vex_set_tls(TP_ADJ(p)) < 0) return -1;
++	libc.can_do_threads = 1;
+ 	td->detach_state = DT_JOINABLE;
+-	td->tid = __syscall(SYS_set_tid_address, &__thread_list_lock);
++	td->tid = __vex_thread_self();
+ 	td->locale = &libc.global_locale;
+ 	td->robust_list.head = &td->robust_list.head;
+ 	td->sysinfo = __sysinfo;
+@@ -131,16 +130,9 @@ static void static_init_tls(size_t *aux)
+ 		+ MIN_TLS_ALIGN-1 & -MIN_TLS_ALIGN;
+ 
+ 	if (libc.tls_size > sizeof builtin_tls) {
+-#ifndef SYS_mmap2
+-#define SYS_mmap2 SYS_mmap
+-#endif
+-		mem = (void *)__syscall(
+-			SYS_mmap2,
+-			0, libc.tls_size, PROT_READ|PROT_WRITE,
++		mem = __vex_mmap(0, libc.tls_size, PROT_READ|PROT_WRITE,
+ 			MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
+-		/* -4095...-1 cast to void * will crash on dereference anyway,
+-		 * so don't bloat the init code checking for error codes and
+-		 * explicitly calling a_crash(). */
++		if (mem == MAP_FAILED) a_crash();
+ 	} else {
+ 		mem = builtin_tls;
+ 	}
+diff --git a/src/env/__libc_start_main.c b/src/env/__libc_start_main.c
+index c5b277b..3116785 100644
+--- a/src/env/__libc_start_main.c
++++ b/src/env/__libc_start_main.c
+@@ -15,6 +15,8 @@ extern weak hidden void (*const __init_array_start)(void), (*const __init_array_
+ static void dummy1(void *p) {}
+ weak_alias(dummy1, __init_ssp);
+ 
++hidden void __vex_signal_init(void);
++
+ #define AUX_CNT 38
+ 
+ #ifdef __GNUC__
+@@ -38,21 +40,19 @@ void __init_libc(char **envp, char *pn)
+ 
+ 	__init_tls(aux);
+ 	__init_ssp((void *)aux[AT_RANDOM]);
++	__vex_signal_init();
+ 
+ 	if (aux[AT_UID]==aux[AT_EUID] && aux[AT_GID]==aux[AT_EGID]
+ 		&& !aux[AT_SECURE]) return;
+ 
+-	struct pollfd pfd[3] = { {.fd=0}, {.fd=1}, {.fd=2} };
+-	int r =
+-#ifdef SYS_poll
+-	__syscall(SYS_poll, pfd, 3, 0);
+-#else
+-	__syscall(SYS_ppoll, pfd, 3, &(struct timespec){0}, 0, _NSIG/8);
+-#endif
+-	if (r<0) a_crash();
+-	for (i=0; i<3; i++) if (pfd[i].revents&POLLNVAL)
+-		if (__sys_open("/dev/null", O_RDWR)<0)
++	/* An elevated program never starts with a closed standard
++	 * descriptor: a later open() would otherwise become stdin/out/err. */
++	for (i=0; i<3; i++) {
++		struct pollfd pfd = { .fd = i };
++		if (poll(&pfd, 1, 0) < 0) a_crash();
++		if ((pfd.revents & POLLNVAL) && __sys_open("/dev/null", O_RDWR) < 0)
+ 			a_crash();
++	}
+ 	libc.secure = 1;
+ }
+ 
+diff --git a/src/internal/pthread_impl.h b/src/internal/pthread_impl.h
+index de2b9d8..0b83f90 100644
+--- a/src/internal/pthread_impl.h
++++ b/src/internal/pthread_impl.h
+@@ -165,18 +165,18 @@ hidden void __unmapself(void *, size_t);
+ hidden int __timedwait(volatile int *, int, clockid_t, const struct timespec *, int);
+ hidden int __timedwait_cp(volatile int *, int, clockid_t, const struct timespec *, int);
+ hidden void __wait(volatile int *, volatile int *, int, int);
++/* Vex: native futexes are keyed by address space, so every futex is
++ * process-private and `priv` carries no information. */
+ static inline void __wake(volatile void *addr, int cnt, int priv)
+ {
+-	if (priv) priv = FUTEX_PRIVATE;
++	(void)priv;
+ 	if (cnt<0) cnt = INT_MAX;
+-	__syscall(SYS_futex, addr, FUTEX_WAKE|priv, cnt) != -ENOSYS ||
+-	__syscall(SYS_futex, addr, FUTEX_WAKE, cnt);
++	__vex_futex_wake(addr, cnt);
+ }
+ static inline void __futexwait(volatile void *addr, int val, int priv)
+ {
+-	if (priv) priv = FUTEX_PRIVATE;
+-	__syscall(SYS_futex, addr, FUTEX_WAIT|priv, val, 0) != -ENOSYS ||
+-	__syscall(SYS_futex, addr, FUTEX_WAIT, val, 0);
++	(void)priv;
++	__vex_futex_wait(addr, val, 0);
+ }
+ 
+ hidden void __acquire_ptc(void);
+diff --git a/src/internal/syscall.h b/src/internal/syscall.h
+index 33d981f..34cd6af 100644
+--- a/src/internal/syscall.h
++++ b/src/internal/syscall.h
+@@ -1,410 +1,32 @@
+ #ifndef _INTERNAL_SYSCALL_H
+ #define _INTERNAL_SYSCALL_H
+ 
++/* Vex: musl's Linux system call layer is not part of the Vex C library.
++ * Every OS service goes through the native Vex interface (vex_native.h).
++ * __syscall() and SYS_* are deliberately undefined, so a source file that
++ * still relies on Linux system calls fails to build instead of silently
++ * reaching another ABI.
++ *
++ * The few raw helpers below keep musl's internal convention: they return a
++ * non-negative result or a negated errno, and __syscall_ret() converts that
++ * into the POSIX errno/-1 form. */
++
+ #include <features.h>
+ #include <errno.h>
+-#include <sys/syscall.h>
+-#include "syscall_arch.h"
+-
+-#ifndef SYSCALL_RLIM_INFINITY
+-#define SYSCALL_RLIM_INFINITY (~0ULL)
+-#endif
+-
+-#ifndef SYSCALL_MMAP2_UNIT
+-#define SYSCALL_MMAP2_UNIT 4096ULL
+-#endif
+-
+-#ifndef __SYSCALL_LL_PRW
+-#define __SYSCALL_LL_PRW(x) __SYSCALL_LL_O(x)
+-#endif
+-
+-#ifndef __scc
+-#define __scc(X) ((long) (X))
+-typedef long syscall_arg_t;
+-#endif
++#include "vex_native.h"
+ 
+-hidden long __syscall_ret(unsigned long),
+-	__syscall_cp(syscall_arg_t, syscall_arg_t, syscall_arg_t, syscall_arg_t,
+-	             syscall_arg_t, syscall_arg_t, syscall_arg_t);
+-
+-#define __syscall1(n,a) __syscall1(n,__scc(a))
+-#define __syscall2(n,a,b) __syscall2(n,__scc(a),__scc(b))
+-#define __syscall3(n,a,b,c) __syscall3(n,__scc(a),__scc(b),__scc(c))
+-#define __syscall4(n,a,b,c,d) __syscall4(n,__scc(a),__scc(b),__scc(c),__scc(d))
+-#define __syscall5(n,a,b,c,d,e) __syscall5(n,__scc(a),__scc(b),__scc(c),__scc(d),__scc(e))
+-#define __syscall6(n,a,b,c,d,e,f) __syscall6(n,__scc(a),__scc(b),__scc(c),__scc(d),__scc(e),__scc(f))
+-#define __syscall7(n,a,b,c,d,e,f,g) __syscall7(n,__scc(a),__scc(b),__scc(c),__scc(d),__scc(e),__scc(f),__scc(g))
+-
+-#define __SYSCALL_NARGS_X(a,b,c,d,e,f,g,h,n,...) n
+-#define __SYSCALL_NARGS(...) __SYSCALL_NARGS_X(__VA_ARGS__,7,6,5,4,3,2,1,0,)
+-#define __SYSCALL_CONCAT_X(a,b) a##b
+-#define __SYSCALL_CONCAT(a,b) __SYSCALL_CONCAT_X(a,b)
+-#define __SYSCALL_DISP(b,...) __SYSCALL_CONCAT(b,__SYSCALL_NARGS(__VA_ARGS__))(__VA_ARGS__)
+-
+-#define __syscall(...) __SYSCALL_DISP(__syscall,__VA_ARGS__)
+-#define syscall(...) __syscall_ret(__syscall(__VA_ARGS__))
+-
+-#define socketcall(nm,a,b,c,d,e,f) __syscall_ret(__socketcall(nm,a,b,c,d,e,f))
+-#define socketcall_cp(nm,a,b,c,d,e,f) __syscall_ret(__socketcall_cp(nm,a,b,c,d,e,f))
+-
+-#define __syscall_cp0(n) (__syscall_cp)(n,0,0,0,0,0,0)
+-#define __syscall_cp1(n,a) (__syscall_cp)(n,__scc(a),0,0,0,0,0)
+-#define __syscall_cp2(n,a,b) (__syscall_cp)(n,__scc(a),__scc(b),0,0,0,0)
+-#define __syscall_cp3(n,a,b,c) (__syscall_cp)(n,__scc(a),__scc(b),__scc(c),0,0,0)
+-#define __syscall_cp4(n,a,b,c,d) (__syscall_cp)(n,__scc(a),__scc(b),__scc(c),__scc(d),0,0)
+-#define __syscall_cp5(n,a,b,c,d,e) (__syscall_cp)(n,__scc(a),__scc(b),__scc(c),__scc(d),__scc(e),0)
+-#define __syscall_cp6(n,a,b,c,d,e,f) (__syscall_cp)(n,__scc(a),__scc(b),__scc(c),__scc(d),__scc(e),__scc(f))
+-
+-#define __syscall_cp(...) __SYSCALL_DISP(__syscall_cp,__VA_ARGS__)
+-#define syscall_cp(...) __syscall_ret(__syscall_cp(__VA_ARGS__))
+-
+-static inline long __alt_socketcall(int sys, int sock, int cp, syscall_arg_t a, syscall_arg_t b, syscall_arg_t c, syscall_arg_t d, syscall_arg_t e, syscall_arg_t f)
+-{
+-	long r;
+-	if (cp) r = __syscall_cp(sys, a, b, c, d, e, f);
+-	else r = __syscall(sys, a, b, c, d, e, f);
+-	if (r != -ENOSYS) return r;
+-#ifdef SYS_socketcall
+-	if (cp) r = __syscall_cp(SYS_socketcall, sock, ((long[6]){a, b, c, d, e, f}));
+-	else r = __syscall(SYS_socketcall, sock, ((long[6]){a, b, c, d, e, f}));
+-#endif
+-	return r;
+-}
+-#define __socketcall(nm, a, b, c, d, e, f) __alt_socketcall(SYS_##nm, __SC_##nm, 0, \
+-	__scc(a), __scc(b), __scc(c), __scc(d), __scc(e), __scc(f))
+-#define __socketcall_cp(nm, a, b, c, d, e, f) __alt_socketcall(SYS_##nm, __SC_##nm, 1, \
+-	__scc(a), __scc(b), __scc(c), __scc(d), __scc(e), __scc(f))
++hidden long __syscall_ret(unsigned long);
+ 
+-/* fixup legacy 16-bit junk */
+-
+-#ifdef SYS_getuid32
+-#undef SYS_lchown
+-#undef SYS_getuid
+-#undef SYS_getgid
+-#undef SYS_geteuid
+-#undef SYS_getegid
+-#undef SYS_setreuid
+-#undef SYS_setregid
+-#undef SYS_getgroups
+-#undef SYS_setgroups
+-#undef SYS_fchown
+-#undef SYS_setresuid
+-#undef SYS_getresuid
+-#undef SYS_setresgid
+-#undef SYS_getresgid
+-#undef SYS_chown
+-#undef SYS_setuid
+-#undef SYS_setgid
+-#undef SYS_setfsuid
+-#undef SYS_setfsgid
+-#define SYS_lchown SYS_lchown32
+-#define SYS_getuid SYS_getuid32
+-#define SYS_getgid SYS_getgid32
+-#define SYS_geteuid SYS_geteuid32
+-#define SYS_getegid SYS_getegid32
+-#define SYS_setreuid SYS_setreuid32
+-#define SYS_setregid SYS_setregid32
+-#define SYS_getgroups SYS_getgroups32
+-#define SYS_setgroups SYS_setgroups32
+-#define SYS_fchown SYS_fchown32
+-#define SYS_setresuid SYS_setresuid32
+-#define SYS_getresuid SYS_getresuid32
+-#define SYS_setresgid SYS_setresgid32
+-#define SYS_getresgid SYS_getresgid32
+-#define SYS_chown SYS_chown32
+-#define SYS_setuid SYS_setuid32
+-#define SYS_setgid SYS_setgid32
+-#define SYS_setfsuid SYS_setfsuid32
+-#define SYS_setfsgid SYS_setfsgid32
+-#endif
+-
+-
+-/* fixup legacy 32-bit-vs-lfs64 junk */
+-
+-#ifdef SYS_fcntl64
+-#undef SYS_fcntl
+-#define SYS_fcntl SYS_fcntl64
+-#endif
+-
+-#ifdef SYS_getdents64
+-#undef SYS_getdents
+-#define SYS_getdents SYS_getdents64
+-#endif
+-
+-#ifdef SYS_ftruncate64
+-#undef SYS_ftruncate
+-#undef SYS_truncate
+-#define SYS_ftruncate SYS_ftruncate64
+-#define SYS_truncate SYS_truncate64
+-#endif
+-
+-#ifdef SYS_stat64
+-#undef SYS_stat
+-#define SYS_stat SYS_stat64
+-#endif
+-
+-#ifdef SYS_fstat64
+-#undef SYS_fstat
+-#define SYS_fstat SYS_fstat64
+-#endif
+-
+-#ifdef SYS_lstat64
+-#undef SYS_lstat
+-#define SYS_lstat SYS_lstat64
+-#endif
+-
+-#ifdef SYS_statfs64
+-#undef SYS_statfs
+-#define SYS_statfs SYS_statfs64
+-#endif
+-
+-#ifdef SYS_fstatfs64
+-#undef SYS_fstatfs
+-#define SYS_fstatfs SYS_fstatfs64
+-#endif
+-
+-#if defined(SYS_newfstatat)
+-#undef SYS_fstatat
+-#define SYS_fstatat SYS_newfstatat
+-#elif defined(SYS_fstatat64)
+-#undef SYS_fstatat
+-#define SYS_fstatat SYS_fstatat64
+-#endif
+-
+-#ifdef SYS_ugetrlimit
+-#undef SYS_getrlimit
+-#define SYS_getrlimit SYS_ugetrlimit
+-#endif
+-
+-#ifdef SYS__newselect
+-#undef SYS_select
+-#define SYS_select SYS__newselect
+-#endif
+-
+-#ifdef SYS_pread64
+-#undef SYS_pread
+-#undef SYS_pwrite
+-#define SYS_pread SYS_pread64
+-#define SYS_pwrite SYS_pwrite64
+-#endif
+-
+-#ifdef SYS_fadvise64_64
+-#undef SYS_fadvise
+-#define SYS_fadvise SYS_fadvise64_64
+-#elif defined(SYS_fadvise64)
+-#undef SYS_fadvise
+-#define SYS_fadvise SYS_fadvise64
+-#endif
+-
+-#ifdef SYS_sendfile64
+-#undef SYS_sendfile
+-#define SYS_sendfile SYS_sendfile64
+-#endif
+-
+-#ifdef SYS_timer_settime32
+-#define SYS_timer_settime SYS_timer_settime32
+-#endif
+-
+-#ifdef SYS_timer_gettime32
+-#define SYS_timer_gettime SYS_timer_gettime32
+-#endif
+-
+-#ifdef SYS_timerfd_settime32
+-#define SYS_timerfd_settime SYS_timerfd_settime32
+-#endif
+-
+-#ifdef SYS_timerfd_gettime32
+-#define SYS_timerfd_gettime SYS_timerfd_gettime32
+-#endif
+-
+-#ifdef SYS_clock_settime32
+-#define SYS_clock_settime SYS_clock_settime32
+-#endif
+-
+-#ifdef SYS_clock_gettime32
+-#define SYS_clock_gettime SYS_clock_gettime32
+-#endif
+-
+-#ifdef SYS_clock_getres_time32
+-#define SYS_clock_getres SYS_clock_getres_time32
+-#endif
+-
+-#ifdef SYS_clock_nanosleep_time32
+-#define SYS_clock_nanosleep SYS_clock_nanosleep_time32
+-#endif
++hidden int __vex_sys_open(const char *path, int flags, int mode);
++hidden int __vex_sys_close(int fd);
++hidden long __vex_sys_read(int fd, void *buf, size_t len);
++hidden long __vex_sys_write(int fd, const void *buf, size_t len);
++hidden int __vex_sys_fcntl(int fd, int cmd, long arg);
+ 
+-#ifdef SYS_gettimeofday_time32
+-#define SYS_gettimeofday SYS_gettimeofday_time32
+-#endif
+-
+-#ifdef SYS_settimeofday_time32
+-#define SYS_settimeofday SYS_settimeofday_time32
+-#endif
+-
+-/* Ensure that the plain syscall names are defined even for "time64-only"
+- * archs. These facilitate callers passing null time arguments, and make
+- * tests for establishing which to use/fallback-to more consistent when
+- * they do need to be called with time arguments. */
+-
+-#ifndef SYS_clock_gettime
+-#define SYS_clock_gettime SYS_clock_gettime64
+-#endif
+-
+-#ifndef SYS_clock_settime
+-#define SYS_clock_settime SYS_clock_settime64
+-#endif
+-
+-#ifndef SYS_clock_adjtime
+-#define SYS_clock_adjtime SYS_clock_adjtime64
+-#endif
+-
+-#ifndef SYS_clock_getres
+-#define SYS_clock_getres SYS_clock_getres_time64
+-#endif
+-
+-#ifndef SYS_clock_nanosleep
+-#define SYS_clock_nanosleep SYS_clock_nanosleep_time64
+-#endif
+-
+-#ifndef SYS_timer_gettime
+-#define SYS_timer_gettime SYS_timer_gettime64
+-#endif
+-
+-#ifndef SYS_timer_settime
+-#define SYS_timer_settime SYS_timer_settime64
+-#endif
+-
+-#ifndef SYS_timerfd_gettime
+-#define SYS_timerfd_gettime SYS_timerfd_gettime64
+-#endif
+-
+-#ifndef SYS_timerfd_settime
+-#define SYS_timerfd_settime SYS_timerfd_settime64
+-#endif
+-
+-#ifndef SYS_utimensat
+-#define SYS_utimensat SYS_utimensat_time64
+-#endif
+-
+-#ifndef SYS_pselect6
+-#define SYS_pselect6 SYS_pselect6_time64
+-#endif
+-
+-#ifndef SYS_ppoll
+-#define SYS_ppoll SYS_ppoll_time64
+-#endif
+-
+-#ifndef SYS_recvmmsg
+-#define SYS_recvmmsg SYS_recvmmsg_time64
+-#endif
+-
+-#ifndef SYS_mq_timedsend
+-#define SYS_mq_timedsend SYS_mq_timedsend_time64
+-#endif
+-
+-#ifndef SYS_mq_timedreceive
+-#define SYS_mq_timedreceive SYS_mq_timedreceive_time64
+-#endif
+-
+-/* SYS_semtimedop omitted because SYS_ipc may provide it */
+-
+-#ifndef SYS_rt_sigtimedwait
+-#define SYS_rt_sigtimedwait SYS_rt_sigtimedwait_time64
+-#endif
+-
+-#ifndef SYS_futex
+-#define SYS_futex SYS_futex_time64
+-#endif
+-
+-#ifndef SYS_sched_rr_get_interval
+-#define SYS_sched_rr_get_interval SYS_sched_rr_get_interval_time64
+-#endif
+-
+-
+-
+-
+-/* socketcall calls */
+-
+-#define __SC_socket      1
+-#define __SC_bind        2
+-#define __SC_connect     3
+-#define __SC_listen      4
+-#define __SC_accept      5
+-#define __SC_getsockname 6
+-#define __SC_getpeername 7
+-#define __SC_socketpair  8
+-#define __SC_send        9
+-#define __SC_recv        10
+-#define __SC_sendto      11
+-#define __SC_recvfrom    12
+-#define __SC_shutdown    13
+-#define __SC_setsockopt  14
+-#define __SC_getsockopt  15
+-#define __SC_sendmsg     16
+-#define __SC_recvmsg     17
+-#define __SC_accept4     18
+-#define __SC_recvmmsg    19
+-#define __SC_sendmmsg    20
+-
+-/* This is valid only because all socket syscalls are made via
+- * socketcall, which always fills unused argument slots with zeros. */
+-#ifndef SYS_accept
+-#define SYS_accept SYS_accept4
+-#endif
+-
+-#ifndef SO_RCVTIMEO_OLD
+-#define SO_RCVTIMEO_OLD  20
+-#endif
+-#ifndef SO_SNDTIMEO_OLD
+-#define SO_SNDTIMEO_OLD  21
+-#endif
+-
+-#define SO_TIMESTAMP_OLD    29
+-#define SO_TIMESTAMPNS_OLD  35
+-#define SO_TIMESTAMPING_OLD 37
+-#define SCM_TIMESTAMP_OLD    SO_TIMESTAMP_OLD
+-#define SCM_TIMESTAMPNS_OLD  SO_TIMESTAMPNS_OLD
+-#define SCM_TIMESTAMPING_OLD SO_TIMESTAMPING_OLD
+-
+-#ifndef SIOCGSTAMP_OLD
+-#define SIOCGSTAMP_OLD 0x8906
+-#endif
+-#ifndef SIOCGSTAMPNS_OLD
+-#define SIOCGSTAMPNS_OLD 0x8907
+-#endif
+-
+-#ifdef SYS_open
+-#define __sys_open2(x,pn,fl) __syscall2(SYS_open, pn, (fl)|O_LARGEFILE)
+-#define __sys_open3(x,pn,fl,mo) __syscall3(SYS_open, pn, (fl)|O_LARGEFILE, mo)
+-#define __sys_open_cp2(x,pn,fl) __syscall_cp2(SYS_open, pn, (fl)|O_LARGEFILE)
+-#define __sys_open_cp3(x,pn,fl,mo) __syscall_cp3(SYS_open, pn, (fl)|O_LARGEFILE, mo)
+-#else
+-#define __sys_open2(x,pn,fl) __syscall3(SYS_openat, AT_FDCWD, pn, (fl)|O_LARGEFILE)
+-#define __sys_open3(x,pn,fl,mo) __syscall4(SYS_openat, AT_FDCWD, pn, (fl)|O_LARGEFILE, mo)
+-#define __sys_open_cp2(x,pn,fl) __syscall_cp3(SYS_openat, AT_FDCWD, pn, (fl)|O_LARGEFILE)
+-#define __sys_open_cp3(x,pn,fl,mo) __syscall_cp4(SYS_openat, AT_FDCWD, pn, (fl)|O_LARGEFILE, mo)
+-#endif
+-
+-#define __sys_open(...) __SYSCALL_DISP(__sys_open,,__VA_ARGS__)
++#define __sys_open(...) __sys_open_mode(__VA_ARGS__, 0)
++#define __sys_open_mode(path, flags, mode, ...) __vex_sys_open((path), (flags), (mode))
++#define __sys_open_cp __sys_open
+ #define sys_open(...) __syscall_ret(__sys_open(__VA_ARGS__))
+-
+-#define __sys_open_cp(...) __SYSCALL_DISP(__sys_open_cp,,__VA_ARGS__)
+-#define sys_open_cp(...) __syscall_ret(__sys_open_cp(__VA_ARGS__))
+-
+-#ifdef SYS_wait4
+-#define __sys_wait4(a,b,c,d) __syscall(SYS_wait4,a,b,c,d)
+-#define __sys_wait4_cp(a,b,c,d) __syscall_cp(SYS_wait4,a,b,c,d)
+-#else
+-hidden long __emulate_wait4(int, int *, int, void *, int);
+-#define __sys_wait4(a,b,c,d) __emulate_wait4(a,b,c,d,0)
+-#define __sys_wait4_cp(a,b,c,d) __emulate_wait4(a,b,c,d,1)
+-#endif
+-
+-#define sys_wait4(a,b,c,d) __syscall_ret(__sys_wait4(a,b,c,d))
+-#define sys_wait4_cp(a,b,c,d) __syscall_ret(__sys_wait4_cp(a,b,c,d))
+-
+-hidden void __procfdname(char __buf[static 15+3*sizeof(int)], unsigned);
+-
+-hidden void *__vdsosym(const char *, const char *);
++#define sys_open_cp sys_open
+ 
+ #endif
+diff --git a/src/malloc/lite_malloc.c b/src/malloc/lite_malloc.c
+index 43a988f..dec5bd7 100644
+--- a/src/malloc/lite_malloc.c
++++ b/src/malloc/lite_malloc.c
+@@ -58,17 +58,9 @@ static void *__simple_malloc(size_t n)
+ 	if (n > end-cur) {
+ 		size_t req = n - (end-cur) + PAGE_SIZE-1 & -PAGE_SIZE;
+ 
+-		if (!cur) {
+-			brk = __syscall(SYS_brk, 0);
+-			brk += -brk & PAGE_SIZE-1;
+-			cur = end = brk;
+-		}
+-
+-		if (brk == end && req < SIZE_MAX-brk
+-		    && !traverses_stack_p(brk, brk+req)
+-		    && __syscall(SYS_brk, brk+req)==brk+req) {
+-			brk = end += req;
+-		} else {
++		/* Vex: there is no program break; every area is mapped. */
++		(void)brk;
++		{
+ 			int new_area = 0;
+ 			req = n + PAGE_SIZE-1 & -PAGE_SIZE;
+ 			/* Only make a new area rather than individual mmap
+diff --git a/src/malloc/mallocng/glue.h b/src/malloc/mallocng/glue.h
+index 77f4c81..061f441 100644
+--- a/src/malloc/mallocng/glue.h
++++ b/src/malloc/mallocng/glue.h
+@@ -33,7 +33,9 @@
+ #define assert(x) do { if (!(x)) a_crash(); } while(0)
+ #endif
+ 
+-#define brk(p) ((uintptr_t)__syscall(SYS_brk, p))
++/* Vex: there is no program break; mallocng then allocates its metadata
++ * areas with mmap. */
++#define brk(p) ((uintptr_t)-1)
+ 
+ #define mmap __mmap
+ #define madvise __madvise
+diff --git a/src/network/lookup_name.c b/src/network/lookup_name.c
+index 3521818..afc46c8 100644
+--- a/src/network/lookup_name.c
++++ b/src/network/lookup_name.c
+@@ -305,6 +305,25 @@ static int addrcmp(const void *_a, const void *_b)
+ 	return b->sortkey - a->sortkey;
+ }
+ 
++/* Vex: host names are resolved by the system resolver (the DHCP-provided
++ * DNS server and its cache). It knows IPv4 addresses only. */
++static int name_from_vex(struct address buf[static MAXADDRS], char canon[static 256], const char *name, int family)
++{
++	uint32_t ip[MAXADDRS];
++	vex_resolve_req_t req = { .name = name, .ipv4 = ip, .capacity = MAXADDRS };
++	long n;
++	if (family == AF_INET6) return EAI_NONAME;
++	n = (long)(int64_t)__vex_call1(VEX_SYS_RESOLVE, __vex_ptr(&req));
++	if (n == -ENOENT) return EAI_NONAME;
++	if (n < 0) return EAI_SYSTEM;
++	for (long i = 0; i < n; i++) {
++		buf[i] = (struct address){ .family = AF_INET };
++		memcpy(buf[i].addr, &ip[i], 4);
++	}
++	(void)canon;
++	return (int)n;
++}
++
+ int __lookup_name(struct address buf[static MAXADDRS], char canon[static 256], const char *name, int family, int flags)
+ {
+ 	int cnt = 0, i, j;
+@@ -331,7 +350,7 @@ int __lookup_name(struct address buf[static MAXADDRS], char canon[static 256], c
+ 	if (!cnt) cnt = name_from_numeric(buf, name, family);
+ 	if (!cnt && !(flags & AI_NUMERICHOST)) {
+ 		cnt = name_from_hosts(buf, canon, name, family);
+-		if (!cnt) cnt = name_from_dns_search(buf, canon, name, family);
++		if (!cnt) cnt = name_from_vex(buf, canon, name, family);
+ 	}
+ 	if (cnt<=0) return cnt ? cnt : EAI_NONAME;
+ 
+diff --git a/src/network/res_msend.c b/src/network/res_msend.c
+index 86c2fcf..f7a7193 100644
+--- a/src/network/res_msend.c
++++ b/src/network/res_msend.c
+@@ -19,7 +19,7 @@ static void cleanup(void *p)
+ {
+ 	struct pollfd *pfd = p;
+ 	for (int i=0; pfd[i].fd >= -1; i++)
+-		if (pfd[i].fd >= 0) __syscall(SYS_close, pfd[i].fd);
++		if (pfd[i].fd >= 0) close(pfd[i].fd);
+ }
+ 
+ static unsigned long mtime()
+@@ -303,7 +303,7 @@ int __res_msend_rc(int nqueries, const unsigned char *const *queries,
+ 			 * Immediately close TCP socket so as not to consume
+ 			 * resources we no longer need. */
+ 			alens[i] = alen;
+-			__syscall(SYS_close, pfd[i].fd);
++			close(pfd[i].fd);
+ 			pfd[i].fd = -1;
+ 		}
+ 	}
+diff --git a/src/network/resolvconf.c b/src/network/resolvconf.c
+index ceabf08..3258fe3 100644
+--- a/src/network/resolvconf.c
++++ b/src/network/resolvconf.c
+@@ -5,6 +5,7 @@
+ #include <string.h>
+ #include <stdlib.h>
+ #include <netinet/in.h>
++#include "syscall.h"
+ 
+ int __get_resolv_conf(struct resolvconf *conf, char *search, size_t search_sz)
+ {
+@@ -84,7 +85,15 @@ int __get_resolv_conf(struct resolvconf *conf, char *search, size_t search_sz)
+ 
+ no_resolv_conf:
+ 	if (!nns) {
+-		__lookup_ipliteral(conf->ns, "127.0.0.1", AF_UNSPEC);
++		/* Vex: without a resolv.conf, use the system's DNS server. */
++		uint32_t ip;
++		vex_resolve_req_t req = { .name = 0, .ipv4 = &ip, .capacity = 1 };
++		if ((long)(int64_t)__vex_call1(VEX_SYS_RESOLVE, __vex_ptr(&req)) == 1) {
++			conf->ns[0] = (struct address){ .family = AF_INET };
++			memcpy(conf->ns[0].addr, &ip, 4);
++		} else {
++			__lookup_ipliteral(conf->ns, "127.0.0.1", AF_UNSPEC);
++		}
+ 		nns = 1;
+ 	}
+ 
+diff --git a/src/process/_Fork.c b/src/process/_Fork.c
+index 9c07792..7396148 100644
+--- a/src/process/_Fork.c
++++ b/src/process/_Fork.c
+@@ -14,7 +14,7 @@ void __post_Fork(int ret)
+ {
+ 	if (!ret) {
+ 		pthread_t self = __pthread_self();
+-		self->tid = __syscall(SYS_set_tid_address, &__thread_list_lock);
++		self->tid = __vex_thread_self();
+ 		self->robust_list.off = 0;
+ 		self->robust_list.pending = 0;
+ 		self->next = self->prev = self;
+@@ -26,18 +26,28 @@ void __post_Fork(int ret)
+ 	if (!ret) __aio_atfork(1);
+ }
+ 
+-pid_t _Fork(void)
++static pid_t fork_impl(int lock)
+ {
+ 	pid_t ret;
+ 	sigset_t set;
+ 	__block_all_sigs(&set);
+-	LOCK(__abort_lock);
+-#ifdef SYS_fork
+-	ret = __syscall(SYS_fork);
+-#else
+-	ret = __syscall(SYS_clone, SIGCHLD, 0);
+-#endif
++	if (lock) LOCK(__abort_lock);
++	/* Vex: the child resumes from the same call with 0. */
++	uint64_t r = __vex_call0(VEX_SYS_PROCESS_FORK);
++	ret = r == (uint64_t)-1 ? -__vex_last_error() : (pid_t)r;
+ 	__post_Fork(ret);
+ 	__restore_sigs(&set);
+ 	return __syscall_ret(ret);
+ }
++
++pid_t _Fork(void)
++{
++	return fork_impl(1);
++}
++
++/* Vex: posix_spawn forks while it already holds __abort_lock (musl's lock
++ * is not recursive); __post_Fork releases it in both processes. */
++hidden pid_t __vex_fork_holding_abort_lock(void)
++{
++	return fork_impl(0);
++}
+diff --git a/src/process/posix_spawn.c b/src/process/posix_spawn.c
+index 8294598..d0721cc 100644
+--- a/src/process/posix_spawn.c
++++ b/src/process/posix_spawn.c
+@@ -20,13 +20,19 @@ struct args {
+ 	char *const *argv, *const *envp;
+ };
+ 
++/* Vex: the child is a native fork (there is no shared-memory vfork), so
++ * the file actions use the ordinary library calls; errno-style results are
++ * negated to keep musl's error path. */
+ static int __sys_dup2(int old, int new)
+ {
+-#ifdef SYS_dup2
+-	return __syscall(SYS_dup2, old, new);
+-#else
+-	return __syscall(SYS_dup3, old, new, 0);
+-#endif
++	return dup2(old, new) < 0 ? -errno : new;
++}
++
++hidden pid_t __vex_fork_holding_abort_lock(void);
++
++static int sys_ret(int r)
++{
++	return r < 0 ? -errno : r;
+ }
+ 
+ static int child(void *args_vp)
+@@ -67,19 +73,16 @@ static int child(void *args_vp)
+ 	}
+ 
+ 	if (attr->__flags & POSIX_SPAWN_SETSID)
+-		if ((ret=__syscall(SYS_setsid)) < 0)
++		if ((ret=sys_ret(setsid())) < 0)
+ 			goto fail;
+ 
+ 	if (attr->__flags & POSIX_SPAWN_SETPGROUP)
+-		if ((ret=__syscall(SYS_setpgid, 0, attr->__pgrp)))
++		if ((ret=sys_ret(setpgid(0, attr->__pgrp))))
+ 			goto fail;
+ 
+-	/* Use syscalls directly because the library functions attempt
+-	 * to do a multi-threaded synchronized id-change, which would
+-	 * trash the parent's state. */
+ 	if (attr->__flags & POSIX_SPAWN_RESETIDS)
+-		if ((ret=__syscall(SYS_setgid, __syscall(SYS_getgid))) ||
+-		    (ret=__syscall(SYS_setuid, __syscall(SYS_getuid))) )
++		if ((ret=sys_ret(setgid(getgid()))) ||
++		    (ret=sys_ret(setuid(getuid()))) )
+ 			goto fail;
+ 
+ 	if (fa && fa->__actions) {
+@@ -92,14 +95,14 @@ static int child(void *args_vp)
+ 			 * parent. To avoid that, we dup the pipe onto
+ 			 * an unoccupied fd. */
+ 			if (op->fd == p) {
+-				ret = __syscall(SYS_dup, p);
++				ret = sys_ret(dup(p));
+ 				if (ret < 0) goto fail;
+-				__syscall(SYS_close, p);
++				close(p);
+ 				p = ret;
+ 			}
+ 			switch(op->cmd) {
+ 			case FDOP_CLOSE:
+-				__syscall(SYS_close, op->fd);
++				close(op->fd);
+ 				break;
+ 			case FDOP_DUP2:
+ 				fd = op->srcfd;
+@@ -111,9 +114,9 @@ static int child(void *args_vp)
+ 					if ((ret=__sys_dup2(fd, op->fd))<0)
+ 						goto fail;
+ 				} else {
+-					ret = __syscall(SYS_fcntl, fd, F_GETFD);
+-					ret = __syscall(SYS_fcntl, fd, F_SETFD,
+-					                ret & ~FD_CLOEXEC);
++					ret = sys_ret(fcntl(fd, F_GETFD));
++					ret = sys_ret(fcntl(fd, F_SETFD,
++					              ret & ~FD_CLOEXEC));
+ 					if (ret<0)
+ 						goto fail;
+ 				}
+@@ -124,15 +127,15 @@ static int child(void *args_vp)
+ 				if (fd != op->fd) {
+ 					if ((ret=__sys_dup2(fd, op->fd))<0)
+ 						goto fail;
+-					__syscall(SYS_close, fd);
++					close(fd);
+ 				}
+ 				break;
+ 			case FDOP_CHDIR:
+-				ret = __syscall(SYS_chdir, op->path);
++				ret = sys_ret(chdir(op->path));
+ 				if (ret<0) goto fail;
+ 				break;
+ 			case FDOP_FCHDIR:
+-				ret = __syscall(SYS_fchdir, op->fd);
++				ret = sys_ret(fchdir(op->fd));
+ 				if (ret<0) goto fail;
+ 				break;
+ 			}
+@@ -143,7 +146,7 @@ static int child(void *args_vp)
+ 	 * to a different fd. We don't use F_DUPFD_CLOEXEC above because
+ 	 * it would fail on older kernels and atomicity is not needed --
+ 	 * in this process there are no threads or signal handlers. */
+-	__syscall(SYS_fcntl, p, F_SETFD, FD_CLOEXEC);
++	fcntl(p, F_SETFD, FD_CLOEXEC);
+ 
+ 	pthread_sigmask(SIG_SETMASK, (attr->__flags & POSIX_SPAWN_SETSIGMASK)
+ 		? &attr->__mask : &args->oldmask, 0);
+@@ -159,8 +162,8 @@ fail:
+ 	ret = -ret;
+ 	if (ret) {
+ 		int r;
+-		do r = __syscall(SYS_write, p, &ret, sizeof ret);
+-		while (r<0 && r!=-EPIPE);
++		do r = write(p, &ret, sizeof ret);
++		while (r<0 && errno!=EPIPE);
+ 	}
+ 	_exit(127);
+ }
+@@ -172,7 +175,6 @@ int posix_spawn(pid_t *restrict res, const char *restrict path,
+ 	char *const argv[restrict], char *const envp[restrict])
+ {
+ 	pid_t pid;
+-	char stack[1024+PATH_MAX];
+ 	int ec=0, cs;
+ 	struct args args;
+ 
+@@ -195,8 +197,9 @@ int posix_spawn(pid_t *restrict res, const char *restrict path,
+ 		goto fail;
+ 	}
+ 
+-	pid = __clone(child, stack+sizeof stack,
+-		CLONE_VM|CLONE_VFORK|SIGCHLD, &args);
++	pid = __vex_fork_holding_abort_lock();
++	if (!pid) child(&args);
++	if (pid < 0) pid = -errno;
+ 	close(args.p[1]);
+ 	UNLOCK(__abort_lock);
+ 
+diff --git a/src/signal/siglongjmp.c b/src/signal/siglongjmp.c
+index bc317ac..f74215c 100644
+--- a/src/signal/siglongjmp.c
++++ b/src/signal/siglongjmp.c
+@@ -3,7 +3,12 @@
+ #include "syscall.h"
+ #include "pthread_impl.h"
+ 
++hidden void __vex_signal_leave(void);
++
+ _Noreturn void siglongjmp(sigjmp_buf buf, int ret)
+ {
++	/* Vex: leaving a signal handler this way means it will not return to
++	 * the kernel. */
++	__vex_signal_leave();
+ 	longjmp(buf, ret);
+ }
+diff --git a/src/signal/sigsetjmp_tail.c b/src/signal/sigsetjmp_tail.c
+index f2aa288..aa2dc02 100644
+--- a/src/signal/sigsetjmp_tail.c
++++ b/src/signal/sigsetjmp_tail.c
+@@ -5,6 +5,6 @@
+ hidden int __sigsetjmp_tail(sigjmp_buf jb, int ret)
+ {
+ 	void *p = jb->__ss;
+-	__syscall(SYS_rt_sigprocmask, SIG_SETMASK, ret?p:0, ret?0:p, _NSIG/8);
++	pthread_sigmask(SIG_SETMASK, ret?p:0, ret?0:p);
+ 	return ret;
+ }
+diff --git a/src/stdio/__fdopen.c b/src/stdio/__fdopen.c
+index 116e78e..8a23096 100644
+--- a/src/stdio/__fdopen.c
++++ b/src/stdio/__fdopen.c
+@@ -27,13 +27,13 @@ FILE *__fdopen(int fd, const char *mode)
+ 	if (!strchr(mode, '+')) f->flags = (*mode == 'r') ? F_NOWR : F_NORD;
+ 
+ 	/* Apply close-on-exec flag */
+-	if (strchr(mode, 'e')) __syscall(SYS_fcntl, fd, F_SETFD, FD_CLOEXEC);
++	if (strchr(mode, 'e')) fcntl(fd, F_SETFD, FD_CLOEXEC);
+ 
+ 	/* Set append mode on fd if opened for append */
+ 	if (*mode == 'a') {
+-		int flags = __syscall(SYS_fcntl, fd, F_GETFL);
++		int flags = fcntl(fd, F_GETFL);
+ 		if (!(flags & O_APPEND))
+-			__syscall(SYS_fcntl, fd, F_SETFL, flags | O_APPEND);
++			fcntl(fd, F_SETFL, flags | O_APPEND);
+ 		f->flags |= F_APP;
+ 	}
+ 
+@@ -43,7 +43,7 @@ FILE *__fdopen(int fd, const char *mode)
+ 
+ 	/* Activate line buffered mode for terminals */
+ 	f->lbf = EOF;
+-	if (!(f->flags & F_NOWR) && !__syscall(SYS_ioctl, fd, TIOCGWINSZ, &wsz))
++	if (!(f->flags & F_NOWR) && !ioctl(fd, TIOCGWINSZ, &wsz))
+ 		f->lbf = '\n';
+ 
+ 	/* Initialize op ptrs. No problem if some are unneeded. */
+diff --git a/src/stdio/__fopen_rb_ca.c b/src/stdio/__fopen_rb_ca.c
+index 183a5d5..155147b 100644
+--- a/src/stdio/__fopen_rb_ca.c
++++ b/src/stdio/__fopen_rb_ca.c
+@@ -8,7 +8,7 @@ FILE *__fopen_rb_ca(const char *filename, FILE *f, unsigned char *buf, size_t le
+ 
+ 	f->fd = sys_open(filename, O_RDONLY|O_CLOEXEC);
+ 	if (f->fd < 0) return 0;
+-	__syscall(SYS_fcntl, f->fd, F_SETFD, FD_CLOEXEC);
++	fcntl(f->fd, F_SETFD, FD_CLOEXEC);
+ 
+ 	f->flags = F_NOWR | F_PERM;
+ 	f->buf = buf + UNGET;
+diff --git a/src/stdio/__stdio_close.c b/src/stdio/__stdio_close.c
+index 3029132..42962ff 100644
+--- a/src/stdio/__stdio_close.c
++++ b/src/stdio/__stdio_close.c
+@@ -1,4 +1,5 @@
+ #include "stdio_impl.h"
++#include <unistd.h>
+ #include "aio_impl.h"
+ 
+ static int dummy(int fd)
+@@ -10,5 +11,5 @@ weak_alias(dummy, __aio_close);
+ 
+ int __stdio_close(FILE *f)
+ {
+-	return syscall(SYS_close, __aio_close(f->fd));
++	return close(__aio_close(f->fd));
+ }
+diff --git a/src/stdio/__stdio_read.c b/src/stdio/__stdio_read.c
+index ea675da..d6de3b2 100644
+--- a/src/stdio/__stdio_read.c
++++ b/src/stdio/__stdio_read.c
+@@ -1,4 +1,5 @@
+ #include "stdio_impl.h"
++#include <unistd.h>
+ #include <sys/uio.h>
+ 
+ size_t __stdio_read(FILE *f, unsigned char *buf, size_t len)
+@@ -9,8 +10,8 @@ size_t __stdio_read(FILE *f, unsigned char *buf, size_t len)
+ 	};
+ 	ssize_t cnt;
+ 
+-	cnt = iov[0].iov_len ? syscall(SYS_readv, f->fd, iov, 2)
+-		: syscall(SYS_read, f->fd, iov[1].iov_base, iov[1].iov_len);
++	cnt = iov[0].iov_len ? readv(f->fd, iov, 2)
++		: read(f->fd, iov[1].iov_base, iov[1].iov_len);
+ 	if (cnt <= 0) {
+ 		f->flags |= cnt ? F_ERR : F_EOF;
+ 		return 0;
+diff --git a/src/stdio/__stdio_write.c b/src/stdio/__stdio_write.c
+index d2d8947..94158cb 100644
+--- a/src/stdio/__stdio_write.c
++++ b/src/stdio/__stdio_write.c
+@@ -12,7 +12,7 @@ size_t __stdio_write(FILE *f, const unsigned char *buf, size_t len)
+ 	int iovcnt = 2;
+ 	ssize_t cnt;
+ 	for (;;) {
+-		cnt = syscall(SYS_writev, f->fd, iov, iovcnt);
++		cnt = writev(f->fd, iov, iovcnt);
+ 		if (cnt == rem) {
+ 			f->wend = f->buf + f->buf_size;
+ 			f->wpos = f->wbase = f->buf;
+diff --git a/src/stdio/__stdout_write.c b/src/stdio/__stdout_write.c
+index dd1ec60..7c15114 100644
+--- a/src/stdio/__stdout_write.c
++++ b/src/stdio/__stdout_write.c
+@@ -5,7 +5,7 @@ size_t __stdout_write(FILE *f, const unsigned char *buf, size_t len)
+ {
+ 	struct winsize wsz;
+ 	f->write = __stdio_write;
+-	if (!(f->flags & F_SVB) && __syscall(SYS_ioctl, f->fd, TIOCGWINSZ, &wsz))
++	if (!(f->flags & F_SVB) && ioctl(f->fd, TIOCGWINSZ, &wsz))
+ 		f->lbf = -1;
+ 	return __stdio_write(f, buf, len);
+ }
+diff --git a/src/stdio/fopen.c b/src/stdio/fopen.c
+index 80bc341..e595d64 100644
+--- a/src/stdio/fopen.c
++++ b/src/stdio/fopen.c
+@@ -1,4 +1,5 @@
+ #include "stdio_impl.h"
++#include <unistd.h>
+ #include <fcntl.h>
+ #include <string.h>
+ #include <errno.h>
+@@ -21,11 +22,11 @@ FILE *fopen(const char *restrict filename, const char *restrict mode)
+ 	fd = sys_open(filename, flags, 0666);
+ 	if (fd < 0) return 0;
+ 	if (flags & O_CLOEXEC)
+-		__syscall(SYS_fcntl, fd, F_SETFD, FD_CLOEXEC);
++		fcntl(fd, F_SETFD, FD_CLOEXEC);
+ 
+ 	f = __fdopen(fd, mode);
+ 	if (f) return f;
+ 
+-	__syscall(SYS_close, fd);
++	close(fd);
+ 	return 0;
+ }
+diff --git a/src/stdio/freopen.c b/src/stdio/freopen.c
+index 1641a4c..ac5a2ea 100644
+--- a/src/stdio/freopen.c
++++ b/src/stdio/freopen.c
+@@ -21,9 +21,9 @@ FILE *freopen(const char *restrict filename, const char *restrict mode, FILE *re
+ 
+ 	if (!filename) {
+ 		if (fl&O_CLOEXEC)
+-			__syscall(SYS_fcntl, f->fd, F_SETFD, FD_CLOEXEC);
++			fcntl(f->fd, F_SETFD, FD_CLOEXEC);
+ 		fl &= ~(O_CREAT|O_EXCL|O_CLOEXEC);
+-		if (syscall(SYS_fcntl, f->fd, F_SETFL, fl) < 0)
++		if (fcntl(f->fd, F_SETFL, fl) < 0)
+ 			goto fail;
+ 	} else {
+ 		f2 = fopen(filename, mode);
+diff --git a/src/stdio/pclose.c b/src/stdio/pclose.c
+index c64da40..c33fa2b 100644
+--- a/src/stdio/pclose.c
++++ b/src/stdio/pclose.c
+@@ -1,13 +1,14 @@
+ #include "stdio_impl.h"
+ #include <errno.h>
+ #include <unistd.h>
++#include <sys/wait.h>
+ 
+ int pclose(FILE *f)
+ {
+ 	int status, r;
+ 	pid_t pid = f->pipe_pid;
+ 	fclose(f);
+-	while ((r=__sys_wait4(pid, &status, 0, 0)) == -EINTR);
+-	if (r<0) return __syscall_ret(r);
++	while ((r=waitpid(pid, &status, 0)) < 0 && errno == EINTR);
++	if (r<0) return -1;
+ 	return status;
+ }
+diff --git a/src/stdio/popen.c b/src/stdio/popen.c
+index 3ec8339..0bde693 100644
+--- a/src/stdio/popen.c
++++ b/src/stdio/popen.c
+@@ -27,8 +27,8 @@ FILE *popen(const char *cmd, const char *mode)
+ 	if (pipe2(p, O_CLOEXEC)) return NULL;
+ 	f = fdopen(p[op], mode);
+ 	if (!f) {
+-		__syscall(SYS_close, p[0]);
+-		__syscall(SYS_close, p[1]);
++		close(p[0]);
++		close(p[1]);
+ 		return NULL;
+ 	}
+ 
+@@ -44,7 +44,7 @@ FILE *popen(const char *cmd, const char *mode)
+ 				f->pipe_pid = pid;
+ 				if (!strchr(mode, 'e'))
+ 					fcntl(p[op], F_SETFD, 0);
+-				__syscall(SYS_close, p[1-op]);
++				close(p[1-op]);
+ 				__ofl_unlock();
+ 				return f;
+ 			}
+@@ -54,7 +54,7 @@ fail:
+ 		posix_spawn_file_actions_destroy(&fa);
+ 	}
+ 	fclose(f);
+-	__syscall(SYS_close, p[1-op]);
++	close(p[1-op]);
+ 
+ 	errno = e;
+ 	return 0;
+diff --git a/src/stdio/remove.c b/src/stdio/remove.c
+index 942e301..b257f5e 100644
+--- a/src/stdio/remove.c
++++ b/src/stdio/remove.c
+@@ -1,19 +1,12 @@
+ #include <stdio.h>
++#include <unistd.h>
+ #include <errno.h>
+ #include <fcntl.h>
+ #include "syscall.h"
+ 
+ int remove(const char *path)
+ {
+-#ifdef SYS_unlink
+-	int r = __syscall(SYS_unlink, path);
+-#else
+-	int r = __syscall(SYS_unlinkat, AT_FDCWD, path, 0);
+-#endif
+-#ifdef SYS_rmdir
+-	if (r==-EISDIR) r = __syscall(SYS_rmdir, path);
+-#else
+-	if (r==-EISDIR) r = __syscall(SYS_unlinkat, AT_FDCWD, path, AT_REMOVEDIR);
+-#endif
+-	return __syscall_ret(r);
++	int r = unlink(path);
++	if (r && (errno==EISDIR || errno==EPERM)) r = rmdir(path);
++	return r;
+ }
+diff --git a/src/stdio/rename.c b/src/stdio/rename.c
+index f540adb..8ccfa01 100644
+--- a/src/stdio/rename.c
++++ b/src/stdio/rename.c
+@@ -4,11 +4,5 @@
+ 
+ int rename(const char *old, const char *new)
+ {
+-#if defined(SYS_rename)
+-	return syscall(SYS_rename, old, new);
+-#elif defined(SYS_renameat)
+-	return syscall(SYS_renameat, AT_FDCWD, old, AT_FDCWD, new);
+-#else
+-	return syscall(SYS_renameat2, AT_FDCWD, old, AT_FDCWD, new, 0);
+-#endif
++	return renameat(AT_FDCWD, old, AT_FDCWD, new);
+ }
+diff --git a/src/stdio/tempnam.c b/src/stdio/tempnam.c
+index 0c65b1f..3e968f1 100644
+--- a/src/stdio/tempnam.c
++++ b/src/stdio/tempnam.c
+@@ -1,4 +1,5 @@
+ #include <stdio.h>
++#include <unistd.h>
+ #include <fcntl.h>
+ #include <errno.h>
+ #include <sys/stat.h>
+@@ -36,11 +37,7 @@ char *tempnam(const char *dir, const char *pfx)
+ 
+ 	for (try=0; try<MAXTRIES; try++) {
+ 		__randname(s+l-6);
+-#ifdef SYS_readlink
+-		r = __syscall(SYS_readlink, s, (char[1]){0}, 1);
+-#else
+-		r = __syscall(SYS_readlinkat, AT_FDCWD, s, (char[1]){0}, 1);
+-#endif
++		r = readlink(s, (char[1]){0}, 1) < 0 ? -errno : 0;
+ 		if (r == -ENOENT) return strdup(s);
+ 	}
+ 	return 0;
+diff --git a/src/stdio/tmpfile.c b/src/stdio/tmpfile.c
+index 2fa8803..28a82c3 100644
+--- a/src/stdio/tmpfile.c
++++ b/src/stdio/tmpfile.c
+@@ -1,4 +1,5 @@
+ #include <stdio.h>
++#include <unistd.h>
+ #include <fcntl.h>
+ #include <stdlib.h>
+ #include "stdio_impl.h"
+@@ -15,13 +16,9 @@ FILE *tmpfile(void)
+ 		__randname(s+13);
+ 		fd = sys_open(s, O_RDWR|O_CREAT|O_EXCL, 0600);
+ 		if (fd >= 0) {
+-#ifdef SYS_unlink
+-			__syscall(SYS_unlink, s);
+-#else
+-			__syscall(SYS_unlinkat, AT_FDCWD, s, 0);
+-#endif
++			unlink(s);
+ 			f = __fdopen(fd, "w+");
+-			if (!f) __syscall(SYS_close, fd);
++			if (!f) close(fd);
+ 			return f;
+ 		}
+ 	}
+diff --git a/src/stdio/tmpnam.c b/src/stdio/tmpnam.c
+index 71dc8bb..42252b4 100644
+--- a/src/stdio/tmpnam.c
++++ b/src/stdio/tmpnam.c
+@@ -1,4 +1,5 @@
+ #include <stdio.h>
++#include <unistd.h>
+ #include <fcntl.h>
+ #include <errno.h>
+ #include <sys/stat.h>
+@@ -16,11 +17,7 @@ char *tmpnam(char *buf)
+ 	int r;
+ 	for (try=0; try<MAXTRIES; try++) {
+ 		__randname(s+12);
+-#ifdef SYS_readlink
+-		r = __syscall(SYS_readlink, s, (char[1]){0}, 1);
+-#else
+-		r = __syscall(SYS_readlinkat, AT_FDCWD, s, (char[1]){0}, 1);
+-#endif
++		r = readlink(s, (char[1]){0}, 1) < 0 ? -errno : 0;
+ 		if (r == -ENOENT) return strcpy(buf ? buf : internal, s);
+ 	}
+ 	return 0;
+diff --git a/src/thread/__timedwait.c b/src/thread/__timedwait.c
+index 666093b..f55952e 100644
+--- a/src/thread/__timedwait.c
++++ b/src/thread/__timedwait.c
+@@ -8,22 +8,20 @@
+ #define IS32BIT(x) !((x)+0x80000000ULL>>32)
+ #define CLAMP(x) (int)(IS32BIT(x) ? (x) : 0x7fffffffU+((0ULL+(x))>>63))
+ 
++/* Vex: the native futex takes a relative timeout in nanoseconds, 0 meaning
++ * no bound; an elapsed relative timeout must still time out at once. */
+ static int __futex4_cp(volatile void *addr, int op, int val, const struct timespec *to)
+ {
+-	int r;
+-#ifdef SYS_futex_time64
+-	time_t s = to ? to->tv_sec : 0;
+-	long ns = to ? to->tv_nsec : 0;
+-	r = -ENOSYS;
+-	if (SYS_futex == SYS_futex_time64 || !IS32BIT(s))
+-		r = __syscall_cp(SYS_futex_time64, addr, op, val,
+-			to ? ((long long[]){s, ns}) : 0);
+-	if (SYS_futex == SYS_futex_time64 || r!=-ENOSYS) return r;
+-	to = to ? (void *)(long[]){CLAMP(s), ns} : 0;
+-#endif
+-	r = __syscall_cp(SYS_futex, addr, op, val, to);
+-	if (r != -ENOSYS) return r;
+-	return __syscall_cp(SYS_futex, addr, op & ~FUTEX_PRIVATE, val, to);
++	uint64_t ns = 0;
++	(void)op;
++	if (to) {
++		if ((uint64_t)to->tv_sec >= UINT64_MAX / 1000000000u - 1)
++			ns = UINT64_MAX;
++		else
++			ns = (uint64_t)to->tv_sec * 1000000000u + (uint64_t)to->tv_nsec;
++		if (!ns) ns = 1;
++	}
++	return __vex_futex_wait(addr, val, ns);
+ }
+ 
+ static volatile int dummy = 0;
+diff --git a/src/thread/__wait.c b/src/thread/__wait.c
+index dc33c1a..e3a8cb5 100644
+--- a/src/thread/__wait.c
++++ b/src/thread/__wait.c
+@@ -9,9 +9,7 @@ void __wait(volatile int *addr, volatile int *waiters, int val, int priv)
+ 		else return;
+ 	}
+ 	if (waiters) a_inc(waiters);
+-	while (*addr==val) {
+-		__syscall(SYS_futex, addr, FUTEX_WAIT|priv, val, 0) != -ENOSYS
+-		|| __syscall(SYS_futex, addr, FUTEX_WAIT, val, 0);
+-	}
++	while (*addr==val)
++		__vex_futex_wait(addr, val, 0);
+ 	if (waiters) a_dec(waiters);
+ }
+diff --git a/src/thread/pthread_barrier_wait.c b/src/thread/pthread_barrier_wait.c
+index cc2a8bb..eeaf1ae 100644
+--- a/src/thread/pthread_barrier_wait.c
++++ b/src/thread/pthread_barrier_wait.c
+@@ -84,8 +84,7 @@ int pthread_barrier_wait(pthread_barrier_t *b)
+ 			a_spin();
+ 		a_inc(&inst->finished);
+ 		while (inst->finished == 1)
+-			__syscall(SYS_futex,&inst->finished,FUTEX_WAIT|FUTEX_PRIVATE,1,0) != -ENOSYS
+-			|| __syscall(SYS_futex,&inst->finished,FUTEX_WAIT,1,0);
++			__vex_futex_wait(&inst->finished, 1, 0);
+ 		return PTHREAD_BARRIER_SERIAL_THREAD;
+ 	}
+ 
+diff --git a/src/thread/pthread_cond_timedwait.c b/src/thread/pthread_cond_timedwait.c
+index 6b76145..d8c41ec 100644
+--- a/src/thread/pthread_cond_timedwait.c
++++ b/src/thread/pthread_cond_timedwait.c
+@@ -48,9 +48,11 @@ static inline void unlock(volatile int *l)
+ static inline void unlock_requeue(volatile int *l, volatile int *r, int w)
+ {
+ 	a_store(l, 0);
+-	if (w) __wake(l, 1, 1);
+-	else __syscall(SYS_futex, l, FUTEX_REQUEUE|FUTEX_PRIVATE, 0, 1, r) != -ENOSYS
+-		|| __syscall(SYS_futex, l, FUTEX_REQUEUE, 0, 1, r);
++	/* Vex: no requeue operation. Waking the waiter is equivalent: it then
++	 * takes the mutex `r` through the ordinary lock path. */
++	(void)r;
++	(void)w;
++	__wake(l, 1, 1);
+ }
+ 
+ enum {
+diff --git a/src/thread/pthread_create.c b/src/thread/pthread_create.c
+index 087f620..3503514 100644
+--- a/src/thread/pthread_create.c
++++ b/src/thread/pthread_create.c
+@@ -155,21 +155,17 @@ _Noreturn void __pthread_exit(void *result)
+ 		 * moments of existence. */
+ 		__block_all_sigs(&set);
+ 
+-		/* Robust list will no longer be valid, and was already
+-		 * processed above, so unregister it with the kernel. */
+-		if (self->robust_list.off)
+-			__syscall(SYS_set_robust_list, 0, 3*sizeof(long));
+-
+ 		/* The following call unmaps the thread's stack mapping
+-		 * and then exits without touching the stack. */
+-		__unmapself(self->map_base, self->map_size);
++		 * and then exits without touching the stack. The robust
++		 * list was processed above and is never known to Vex. */
++		__vex_thread_exit_unmap(self->map_base, self->map_size);
+ 	}
+ 
+ 	/* Wake any joiner. */
+ 	a_store(&self->detach_state, DT_EXITED);
+ 	__wake(&self->detach_state, 1, 1);
+ 
+-	for (;;) __syscall(SYS_exit, 0);
++	__vex_thread_exit(0);
+ }
+ 
+ void __do_cleanup_push(struct __ptcb *cb)
+@@ -191,29 +187,22 @@ struct start_args {
+ 	unsigned long sig_mask[_NSIG/8/sizeof(long)];
+ };
+ 
+-static int start(void *p)
++/* Vex: a native thread enters a SysV function taking one argument. The
++ * creator only exposes the thread after VEX_SYS_THREAD_START succeeded, and
++ * explicit scheduling never needs a hand-off (see __pthread_create). */
++static void start(void *p)
+ {
+ 	struct start_args *args = p;
+-	int state = args->control;
+-	if (state) {
+-		if (a_cas(&args->control, 1, 2)==1)
+-			__wait(&args->control, 0, 2, 1);
+-		if (args->control) {
+-			__syscall(SYS_set_tid_address, &args->control);
+-			for (;;) __syscall(SYS_exit, 0);
+-		}
+-	}
+-	__syscall(SYS_rt_sigprocmask, SIG_SETMASK, &args->sig_mask, 0, _NSIG/8);
++	pthread_sigmask(SIG_SETMASK, (const sigset_t *)&args->sig_mask, 0);
+ 	__pthread_exit(args->start_func(args->start_arg));
+-	return 0;
+ }
+ 
+-static int start_c11(void *p)
++static void start_c11(void *p)
+ {
+ 	struct start_args *args = p;
+ 	int (*start)(void*) = (int(*)(void*)) args->start_func;
++	pthread_sigmask(SIG_SETMASK, (const sigset_t *)&args->sig_mask, 0);
+ 	__pthread_exit((void *)(uintptr_t)start(args->start_arg));
+-	return 0;
+ }
+ 
+ #define ROUND(x) (((x)+PAGE_SIZE-1)&-PAGE_SIZE)
+@@ -240,9 +229,6 @@ int __pthread_create(pthread_t *restrict res, const pthread_attr_t *restrict att
+ 	size_t size, guard;
+ 	struct pthread *self, *new;
+ 	unsigned char *map = 0, *stack = 0, *tsd = 0, *stack_limit;
+-	unsigned flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND
+-		| CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS
+-		| CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID | CLONE_DETACHED;
+ 	pthread_attr_t attr = { 0 };
+ 	sigset_t set;
+ 
+@@ -255,13 +241,21 @@ int __pthread_create(pthread_t *restrict res, const pthread_attr_t *restrict att
+ 		init_file_lock(__stdin_used);
+ 		init_file_lock(__stdout_used);
+ 		init_file_lock(__stderr_used);
+-		__syscall(SYS_rt_sigprocmask, SIG_UNBLOCK, SIGPT_SET, 0, _NSIG/8);
++		pthread_sigmask(SIG_UNBLOCK, SIGPT_SET, 0);
+ 		self->tsd = (void **)__pthread_tsd_main;
+ 		__membarrier_init();
+ 		libc.threaded = 1;
+ 	}
+ 	if (attrp && !c11) attr = *attrp;
+ 
++	/* Vex: FlowSched has no POSIX scheduling classes. An explicit policy
++	 * equal to the default is honoured as such; anything else cannot be. */
++	if (attr._a_sched) {
++		if (attr._a_policy != SCHED_OTHER || attr._a_prio != 0)
++			return ENOTSUP;
++		attr._a_sched = 0;
++	}
++
+ 	__acquire_ptc();
+ 	if (!attrp || c11) {
+ 		attr._a_stacksize = __default_stacksize;
+@@ -336,7 +330,7 @@ int __pthread_create(pthread_t *restrict res, const pthread_attr_t *restrict att
+ 	struct start_args *args = (void *)stack;
+ 	args->start_func = entry;
+ 	args->start_arg = arg;
+-	args->control = attr._a_sched ? 1 : 0;
++	args->control = 0;
+ 
+ 	/* Application signals (but not the synccall signal) must be
+ 	 * blocked before the thread list lock can be taken, to ensure
+@@ -352,22 +346,15 @@ int __pthread_create(pthread_t *restrict res, const pthread_attr_t *restrict att
+ 
+ 	__tl_lock();
+ 	if (!libc.threads_minus_1++) libc.need_locks = 1;
+-	ret = __clone((c11 ? start_c11 : start), stack, flags, args, &new->tid, TP_ADJ(new), &__thread_list_lock);
+-
+-	/* All clone failures translate to EAGAIN. If explicit scheduling
+-	 * was requested, attempt it before unlocking the thread list so
+-	 * that the failed thread is never exposed and so that we can
+-	 * clean up all transient resource usage before returning. */
+-	if (ret < 0) {
+-		ret = -EAGAIN;
+-	} else if (attr._a_sched) {
+-		ret = __syscall(SYS_sched_setscheduler,
+-			new->tid, attr._a_policy, &attr._a_prio);
+-		if (a_swap(&args->control, ret ? 3 : 0)==2)
+-			__wake(&args->control, 1, 1);
+-		if (ret)
+-			__wait(&args->control, 0, 3, 0);
+-	}
++	/* The start frame needs a 16-byte aligned top; the kernel stores
++	 * the new thread id before it can run, and clears the thread list
++	 * lock when it terminates (that is what __tl_sync waits for). */
++	ret = __vex_thread_start(c11 ? start_c11 : start, args,
++		(void *)((uintptr_t)stack & -16), TP_ADJ(new), &new->tid,
++		&__thread_list_lock);
++
++	/* All thread creation failures translate to EAGAIN. */
++	if (ret < 0) ret = -EAGAIN;
+ 
+ 	if (ret >= 0) {
+ 		new->next = self->next;
+diff --git a/src/thread/pthread_mutex_timedlock.c b/src/thread/pthread_mutex_timedlock.c
+index 9279fc5..514bfd9 100644
+--- a/src/thread/pthread_mutex_timedlock.c
++++ b/src/thread/pthread_mutex_timedlock.c
+@@ -3,54 +3,14 @@
+ #define IS32BIT(x) !((x)+0x80000000ULL>>32)
+ #define CLAMP(x) (int)(IS32BIT(x) ? (x) : 0x7fffffffU+((0ULL+(x))>>63))
+ 
+-static int __futex4(volatile void *addr, int op, int val, const struct timespec *to)
+-{
+-#ifdef SYS_futex_time64
+-	time_t s = to ? to->tv_sec : 0;
+-	long ns = to ? to->tv_nsec : 0;
+-	int r = -ENOSYS;
+-	if (SYS_futex == SYS_futex_time64 || !IS32BIT(s))
+-		r = __syscall(SYS_futex_time64, addr, op, val,
+-			to ? ((long long[]){s, ns}) : 0);
+-	if (SYS_futex == SYS_futex_time64 || r!=-ENOSYS) return r;
+-	to = to ? (void *)(long[]){CLAMP(s), ns} : 0;
+-#endif
+-	return __syscall(SYS_futex, addr, op, val, to);
+-}
+-
++/* Vex: priority-inheritance mutexes cannot be created (see
++ * pthread_mutexattr_setprotocol), so a PI mutex here is a corrupted object. */
+ static int pthread_mutex_timedlock_pi(pthread_mutex_t *restrict m, const struct timespec *restrict at)
+ {
+-	int type = m->_m_type;
+-	int priv = (type & 128) ^ 128;
+-	pthread_t self = __pthread_self();
+-	int e;
+-
+-	if (!priv) self->robust_list.pending = &m->_m_next;
+-
+-	do e = -__futex4(&m->_m_lock, FUTEX_LOCK_PI|priv, 0, at);
+-	while (e==EINTR);
+-	if (e) self->robust_list.pending = 0;
+-
+-	switch (e) {
+-	case 0:
+-		/* Catch spurious success for non-robust mutexes. */
+-		if (!(type&4) && ((m->_m_lock & 0x40000000) || m->_m_waiters)) {
+-			a_store(&m->_m_waiters, -1);
+-			__syscall(SYS_futex, &m->_m_lock, FUTEX_UNLOCK_PI|priv);
+-			self->robust_list.pending = 0;
+-			break;
+-		}
+-		/* Signal to trylock that we already have the lock. */
+-		m->_m_count = -1;
+-		return __pthread_mutex_trylock(m);
+-	case ETIMEDOUT:
+-		return e;
+-	case EDEADLK:
+-		if ((type&3) == PTHREAD_MUTEX_ERRORCHECK) return e;
+-	}
+-	do e = __timedwait(&(int){0}, 0, CLOCK_REALTIME, at, 1);
+-	while (e != ETIMEDOUT);
+-	return e;
++	(void)m;
++	(void)at;
++	a_crash();
++	return EINVAL;
+ }
+ 
+ int __pthread_mutex_timedlock(pthread_mutex_t *restrict m, const struct timespec *restrict at)
+diff --git a/src/thread/pthread_mutex_trylock.c b/src/thread/pthread_mutex_trylock.c
+index a24e7c5..d12a2f0 100644
+--- a/src/thread/pthread_mutex_trylock.c
++++ b/src/thread/pthread_mutex_trylock.c
+@@ -25,10 +25,10 @@ int __pthread_mutex_trylock_owner(pthread_mutex_t *m)
+ 	if (own || (old && !(type & 4))) return EBUSY;
+ 
+ 	if (type & 128) {
+-		if (!self->robust_list.off) {
++		/* Vex: robust mutexes are process-private and recovered by
++		 * __pthread_exit; there is no kernel robust list. */
++		if (!self->robust_list.off)
+ 			self->robust_list.off = (char*)&m->_m_lock-(char *)&m->_m_next;
+-			__syscall(SYS_set_robust_list, &self->robust_list, 3*sizeof(long));
+-		}
+ 		if (m->_m_waiters) tid |= 0x80000000;
+ 		self->robust_list.pending = &m->_m_next;
+ 	}
+@@ -41,12 +41,7 @@ int __pthread_mutex_trylock_owner(pthread_mutex_t *m)
+ 	}
+ 
+ success:
+-	if ((type&8) && m->_m_waiters) {
+-		int priv = (type & 128) ^ 128;
+-		__syscall(SYS_futex, &m->_m_lock, FUTEX_UNLOCK_PI|priv);
+-		self->robust_list.pending = 0;
+-		return (type&4) ? ENOTRECOVERABLE : EBUSY;
+-	}
++	if ((type&8) && m->_m_waiters) a_crash(); /* no PI mutexes on Vex */
+ 
+ 	volatile void *next = self->robust_list.head;
+ 	m->_m_next = next;
+diff --git a/src/thread/pthread_mutex_unlock.c b/src/thread/pthread_mutex_unlock.c
+index b66423e..6a8a049 100644
+--- a/src/thread/pthread_mutex_unlock.c
++++ b/src/thread/pthread_mutex_unlock.c
+@@ -32,8 +32,7 @@ int __pthread_mutex_unlock(pthread_mutex_t *m)
+ 	}
+ 	if (type&8) {
+ 		if (old<0 || a_cas(&m->_m_lock, old, new)!=old) {
+-			if (new) a_store(&m->_m_waiters, -1);
+-			__syscall(SYS_futex, &m->_m_lock, FUTEX_UNLOCK_PI|priv);
++			a_crash(); /* no PI mutexes on Vex */
+ 		}
+ 		cont = 0;
+ 		waiters = 0;
+diff --git a/src/thread/pthread_mutexattr_setprotocol.c b/src/thread/pthread_mutexattr_setprotocol.c
+index 8b80c1c..a4a9f16 100644
+--- a/src/thread/pthread_mutexattr_setprotocol.c
++++ b/src/thread/pthread_mutexattr_setprotocol.c
+@@ -11,15 +11,10 @@ int pthread_mutexattr_setprotocol(pthread_mutexattr_t *a, int protocol)
+ 		a->__attr &= ~8;
+ 		return 0;
+ 	case PTHREAD_PRIO_INHERIT:
+-		r = check_pi_result;
+-		if (r < 0) {
+-			volatile int lk = 0;
+-			r = -__syscall(SYS_futex, &lk, FUTEX_LOCK_PI, 0, 0);
+-			a_store(&check_pi_result, r);
+-		}
+-		if (r) return r;
+-		a->__attr |= 8;
+-		return 0;
++		/* Vex: no kernel priority-inheritance futex. */
++		(void)r;
++		(void)check_pi_result;
++		return ENOTSUP;
+ 	case PTHREAD_PRIO_PROTECT:
+ 		return ENOTSUP;
+ 	default:
+diff --git a/src/thread/pthread_mutexattr_setrobust.c b/src/thread/pthread_mutexattr_setrobust.c
+index 30a9ac3..9098306 100644
+--- a/src/thread/pthread_mutexattr_setrobust.c
++++ b/src/thread/pthread_mutexattr_setrobust.c
+@@ -7,14 +7,9 @@ int pthread_mutexattr_setrobust(pthread_mutexattr_t *a, int robust)
+ {
+ 	if (robust > 1U) return EINVAL;
+ 	if (robust) {
+-		int r = check_robust_result;
+-		if (r < 0) {
+-			void *p;
+-			size_t l;
+-			r = -__syscall(SYS_get_robust_list, 0, &p, &l);
+-			a_store(&check_robust_result, r);
+-		}
+-		if (r) return r;
++		/* Vex: process-private robust mutexes are recovered entirely
++		 * by __pthread_exit, so they need no kernel support. */
++		(void)check_robust_result;
+ 		a->__attr |= 4;
+ 		return 0;
+ 	}
+diff --git a/src/time/__map_file.c b/src/time/__map_file.c
+index c2b29fe..5c45ff7 100644
+--- a/src/time/__map_file.c
++++ b/src/time/__map_file.c
+@@ -13,6 +13,6 @@ const char unsigned *__map_file(const char *pathname, size_t *size)
+ 		map = __mmap(0, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+ 		*size = st.st_size;
+ 	}
+-	__syscall(SYS_close, fd);
++	__vex_sys_close(fd);
+ 	return map == MAP_FAILED ? 0 : map;
+ }

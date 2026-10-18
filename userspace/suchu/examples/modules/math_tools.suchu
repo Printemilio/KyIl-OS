@@ -1,0 +1,13 @@
+pi = 3.141592653589793;
+
+fun circle_area(radius) {
+  return pi * radius * radius;
+}
+
+fun circle_perimeter(radius) {
+  return 2 * pi * radius;
+}
+
+fun clamp(value, minimum, maximum) {
+  return max(minimum, min(value, maximum));
+}

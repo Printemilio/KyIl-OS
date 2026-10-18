@@ -4,6 +4,10 @@
 #include <stdint.h>
 
 void rtc_init(void);
+/* Serialize a native CLOCK provider handoff with the early CMOS fallback. */
+int rtc_driver_transaction(int (*operation)(void *),void *context);
+/* Platform RTC is UTC; invalid/unavailable dates fail explicitly. */
+int rtc_epoch_seconds(uint64_t *out);
 uint8_t rtc_hours(void);
 uint8_t rtc_minutes(void);
 uint8_t rtc_seconds(void);
