@@ -35,6 +35,7 @@ typedef struct vex_fs_root_names { const char *destination,*backup; } vex_fs_roo
 #define VEX_FS_ALL 255u
 #define VEX_FS_OPEN_REGULAR 0x10000000u /* reject directories atomically */
 #define VEX_FS_OPEN_EXECUTABLE 0x20000000u /* readonly immutable executable authority */
+#define VEX_FS_OPEN_PROTECTED 0x40000000u /* READONLY existing regular file; native name protection until last object/map/IPC ref. No read/write sharing lease. */
 /* Native root capability = process-local FD to a typed, refcounted object.
  * CREATE: absolute native path + rights; returns new FD. DERIVE: parent FD,
  * relative subdirectory (empty = same anchor) + attenuated rights; returns FD.

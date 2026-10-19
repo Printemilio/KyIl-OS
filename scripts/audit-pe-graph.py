@@ -73,12 +73,13 @@ class PE:
         targets=[]
         for i in range(nf):
             target=self.u32(self.off(funcs+i*4,4))
-            value=self.string(target) if r<=target<r+size else {'rva':target}
-            targets.append(value);out['#'+str(first+i)]=value
+            value=(self.string(target) if r<=target<r+size else {'rva':target}) if target else None
+            targets.append(value)
+            if value is not None:out['#'+str(first+i)]=value
         for i in range(nn):
             idx=self.u16(self.off(ords+i*2,2))
             if idx>=nf:raise ValueError('export ordinal')
-            out[self.string(self.u32(self.off(names+i*4,4)))]=targets[idx]
+            if targets[idx] is not None:out[self.string(self.u32(self.off(names+i*4,4)))]=targets[idx]
         return out
 
 def api_sets(path):
@@ -116,18 +117,27 @@ def registered(root):
     version_names=groups.get('version',set());nt_names=groups.get('nt_core',set())|groups.get('registry',set())
     rng_names=groups.get('rng',set())
     multimedia_names=groups.get('multimedia',set())
+    winsock_names=groups.get('winsock',set())
     shell_names=groups.get('shell_api',set())
-    advapi_names=groups.get('advapi',set())|groups.get('security_data',set())
+    user_names=groups.get('user_api',set())
+    advapi_names=groups.get('advapi',set())|groups.get('security_data',set())|groups.get('token',set())
     for dll in ('kernel32.dll','kernelbase.dll'):
-        builtins[dll]={n:src for n,src in all_exports.items() if n not in version_names|nt_names|rng_names|multimedia_names|advapi_names|shell_names}
+        builtins[dll]={n:src for n,src in all_exports.items() if n not in version_names|nt_names|rng_names|multimedia_names|winsock_names|advapi_names|shell_names|user_names}
+    if winsock_names:
+        builtins['ws2_32.dll']={n:all_exports[n] for n in winsock_names}
+        catalog=json.loads((root/'userspace/windows/provider_ordinals.json').read_text())
+        for number,name in catalog['ws2_32.dll'].items():
+            if name in winsock_names:builtins['ws2_32.dll']['#'+number]=all_exports[name]
     if rng_names:builtins['bcryptprimitives.dll']={n:all_exports[n] for n in rng_names}
     if multimedia_names:builtins['winmm.dll']={n:all_exports[n] for n in multimedia_names}
     if shell_names:builtins['shell32.dll']={n:all_exports[n] for n in shell_names}
+    if user_names:builtins['user32.dll']={n:all_exports[n] for n in user_names}
     if advapi_names:builtins['advapi32.dll']={n:all_exports[n] for n in advapi_names}
     builtins['ntdll.dll']={n:all_exports[n] for stem in ('heap','exceptions') for n in groups.get(stem,())}
     builtins['ntdll.dll'].update({n:all_exports[n] for n in nt_names})
     builtins['ntdll.dll'].update({n:all_exports[n] for n in groups.get('unwind',set())})
     builtins['ntdll.dll'].update({n:all_exports[n] for n in groups.get('seh',set())})
+    builtins['ntdll.dll'].pop('GuardCheckLongJumpTarget',None)
     if version_names:builtins['version.dll']={n:all_exports[n] for n in version_names}
     return builtins
 

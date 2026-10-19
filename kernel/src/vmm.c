@@ -534,7 +534,7 @@ uint64_t vmm_get_physical_any(void *pml4, uint64_t virt) {
     }
     uint64_t *pt = phys_to_virt(pde & VMM_ADDR_MASK);
     const uint64_t pte = pt[pt_index(virt)];
-    if ((pte & VMM_ADDR_MASK) == 0) {
+    if (pte == 0) {
         return 0;
     }
     return (pte & VMM_ADDR_MASK) | (virt & (VMM_PAGE_SIZE - 1ull));
@@ -563,7 +563,9 @@ uint64_t vmm_get_page_flags(void *pml4, uint64_t virt) {
     }
     uint64_t *pt = phys_to_virt(pde & VMM_ADDR_MASK);
     const uint64_t pte = pt[pt_index(virt)];
-    if ((pte & VMM_ADDR_MASK) == 0) {
+    /* Frame number zero is valid (notably in a UEFI loader memory map).
+       Only an entirely empty leaf is absent; PROT_NONE also retains flags. */
+    if (pte == 0) {
         return 0;
     }
     uint64_t effective = pte & VMM_PAGE_FLAG_MASK;
@@ -605,7 +607,7 @@ int vmm_set_page_flags(void *pml4, uint64_t virt, uint64_t flags) {
 
     uint64_t *pt = phys_to_virt(pde & VMM_ADDR_MASK);
     const uint64_t pte = pt[pti];
-    if ((pte & VMM_ADDR_MASK) == 0) {
+    if (pte == 0) {
         return -1;
     }
 
@@ -1082,6 +1084,20 @@ int vmm_kernel_mapping_selftest(void) {
         !(vmm_get_page_flags(a, mapping_test_address) & VMM_PAGE_NX) ||
         (vmm_get_page_flags(b, mapping_test_address) & VMM_PAGE_USER) ||
         (((uint64_t *)b)[pml4_index(mapping_test_address)] & VMM_PAGE_USER)) goto cleanup;
+    /* Read-only supervisor alias: test PFN zero without touching its bytes.
+       UEFI may describe this frame as loader-owned. It is not an empty PTE. */
+    const uint64_t zero_alias = mapping_test_address + 2u*VMM_PAGE_SIZE;
+    vmm_map_page(a,zero_alias,0,VMM_PAGE_PRESENT|VMM_PAGE_NX);
+    if(vmm_get_page_flags(a,zero_alias)!=(VMM_PAGE_PRESENT|VMM_PAGE_NX) ||
+       vmm_get_physical(a,zero_alias+37u)!=37u ||
+       vmm_set_page_flags(a,zero_alias,VMM_PAGE_NX) ||
+       vmm_get_page_flags(a,zero_alias)!=VMM_PAGE_NX ||
+       vmm_get_physical_any(a,zero_alias+37u)!=37u ||
+       vmm_set_page_flags(a,zero_alias,VMM_PAGE_PRESENT|VMM_PAGE_NX) ||
+       vmm_set_page_flags(a,zero_alias,VMM_PAGE_PRESENT|VMM_PAGE_USER)==0 ||
+       vmm_get_page_flags(a,zero_alias)!=(VMM_PAGE_PRESENT|VMM_PAGE_NX))goto cleanup;
+    vmm_unmap_page(a,zero_alias);
+    if(vmm_get_page_flags(a,zero_alias))goto cleanup;
     /* A loader/fork root created after publication inherits the shared branch. */
     c = vmm_new_address_space();
     if (!c || vmm_get_physical(c, mapping_test_address) != (uint64_t)pa) goto cleanup;
@@ -1110,6 +1126,7 @@ cleanup:
     if (mapping_test_address) {
         vmm_unmap_kernel_page(mapping_test_address);
         vmm_unmap_kernel_page(mapping_test_address + 4096u);
+        vmm_unmap_kernel_page(mapping_test_address + 2u*VMM_PAGE_SIZE);
     }
     if (pa) pmm_free_page(pa);
     if (pb) pmm_free_page(pb);

@@ -13,11 +13,14 @@ function Run([string]$Exe,[string[]]$Arguments) {
 $Objects=@()
 Run 'python' @("$Root/scripts/generate-windows-export-census.py")
 Run 'python' @("$Root/scripts/build-windows-provider-dlls.py")
-foreach($Source in @('start.S','guard.S','fault_entry.S','capture_context.S','seh_entry.S','native.c','pe_image.c','loader.c','win32.c','rng.c','multimedia.c','advapi.c','security_data.c','memory_api.c','environment.c','environment_api.c','heap.c','load_config.c','synchronization.c','shell_api.c','slist.c','objects.c','registered_wait.c','completion.c','pipes.c','mapping.c','files.c','exceptions.c','unwind.c','seh.c','namespace.c','path_api.c','search.c','version.c','messages.c','console_api.c','console_control.c','profile_api.c','nt_core.c','registry.c','nls.c','encoding.c','system.c','calendar.c','process.c','job.c','wer.c')) {
+foreach($Source in @('start.S','guard.S','fault_entry.S','capture_context.S','seh_entry.S','native.c','pe_image.c','loader.c','win32.c','base_contracts.c','winsock.c','rng.c','multimedia.c','advapi.c','security_data.c','token.c','memory_api.c','environment.c','environment_api.c','heap.c','load_config.c','synchronization.c','shell_api.c','user_api.c','slist.c','objects.c','registered_wait.c','completion.c','pipes.c','mapping.c','files.c','exceptions.c','unwind.c','seh.c','namespace.c','path_api.c','search.c','version.c','messages.c','console_api.c','console_control.c','profile_api.c','nt_core.c','registry.c','nls.c','encoding.c','system.c','calendar.c','process.c','job.c','wer.c')) {
     $Object="$Out/$Source.o";$Objects+=$Object
-    Run $Clang @('-target','x86_64-unknown-none-elf','-march=x86-64','-mno-avx','-ffreestanding',
+    # The bare-metal driver drops -fstack-clash-protection; enable the x86
+    # backend's real inline probes explicitly. Do not change the native target.
+    $ProbeFlags=@();if($Source.EndsWith('.c')){$ProbeFlags=@('-Xclang','-fstack-clash-protection')}
+    Run $Clang (@('-target','x86_64-unknown-none-elf','-march=x86-64','-mno-avx','-ffreestanding',
         '-fno-builtin','-fno-stack-protector','-fno-pie','-mno-red-zone','-O2','-g','-Wall','-Wextra',
-        '-I',"$Root/kernel/include",'-I',"$Root/userspace/libvex/include",'-c',"$Root/userspace/windows/$Source",'-o',$Object)
+        '-I',"$Root/kernel/include",'-I',"$Root/userspace/libvex/include",'-c',"$Root/userspace/windows/$Source",'-o',$Object)+$ProbeFlags)
 }
 Run $ElfLink (@('-static','-z','noexecstack','-e','_start','-Ttext=0x20000000','-o',"$Root/usr/bin/kyil-windows")+$Objects)
 Run $Clang @('-target','x86_64-unknown-none-elf','-march=x86-64','-mno-avx','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-pie','-mno-red-zone','-O2','-g','-Wall','-Wextra','-I',"$Root/kernel/include",'-I',"$Root/userspace/libvex/include",'-c',"$Root/userspace/windows/pipe_service.c",'-o',"$Out/pipe-service.o")
@@ -25,6 +28,8 @@ Run $ElfLink @('-static','-z','noexecstack','-e','_start','-Ttext=0x20000000','-
 
 Run $Clang @('-target','x86_64-unknown-none-elf','-march=x86-64','-mno-avx','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-pie','-mno-red-zone','-O2','-g','-Wall','-Wextra','-I',"$Root/kernel/include",'-I',"$Root/userspace/libvex/include",'-c',"$Root/userspace/windows/event_service.c",'-o',"$Out/event-service.o")
 Run $ElfLink @('-static','-z','noexecstack','-e','_start','-Ttext=0x20000000','-o',"$Root/usr/lib/kyil-windows/event-service","$Out/start.S.o","$Out/native.c.o","$Out/event-service.o")
+Run $Clang @('-target','x86_64-unknown-none-elf','-march=x86-64','-mno-avx','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-pie','-mno-red-zone','-O2','-g','-Wall','-Wextra','-Ikernel/include','-Iuserspace/libvex/include','-c',"$Root/userspace/windows/resource_service.c",'-o',"$Out/resource-service.o")
+Run $ElfLink @('-static','-z','noexecstack','-e','_start','-Ttext=0x20000000','-o',"$Root/usr/lib/kyil-windows/resource-service","$Out/start.S.o","$Out/native.c.o","$Out/resource-service.o")
 Run $Clang @('-target','x86_64-unknown-none-elf','-march=x86-64','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-pie','-O2',
     '-I',"$Root/kernel/include",'-I',"$Root/userspace/libvex/include",'-c',"$Root/userspace/windows/tests/runner.c",'-o',"$Out/runner.o")
 New-Item -ItemType Directory -Force "$Root/usr/native-tests" | Out-Null
@@ -36,7 +41,7 @@ Run $Clang @('-target','x86_64-unknown-none-elf','-march=x86-64','-ffreestanding
     '-I',"$Root/kernel/include",'-I',"$Root/userspace/libvex/include",'-c',"$Root/userspace/windows/tests/native_fs_roots.c",'-o',"$Out/native_fs_roots.o")
 Run $ElfLink @('-static','-z','noexecstack','-e','_start','-Ttext=0x20000000','-o',"$Root/usr/native-tests/native_fs_roots_test", "$Out/start.S.o","$Out/native.c.o","$Out/native_fs_roots.o")
 
-foreach($NativeFixture in @('ultra_service','ultra_space')) {
+foreach($NativeFixture in @('ultra_service','ultra_space','native_file_protection')) {
     Run $Clang @('-target','x86_64-unknown-none-elf','-march=x86-64','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-pie','-mno-red-zone','-O2','-g','-Ikernel/include','-Iuserspace/libvex/include','-c',"$Root/userspace/windows/tests/$NativeFixture.c",'-o',"$Out/$NativeFixture.o")
     Run $ElfLink @('-static','-z','noexecstack','-e','_start','-Ttext=0x20000000','-o',"$Root/usr/native-tests/$NativeFixture", "$Out/start.S.o","$Out/native.c.o","$Out/$NativeFixture.o")
 }
@@ -53,6 +58,10 @@ Run $Link @('/dll','/entry:DllMain','/nodefaultlib','/machine:x64','/base:0x1400
     "$Out/library.obj","$Out/kernel32.lib","/out:$Stage/kyil-test.dll","/implib:$Out/kyil-test.lib")
 Run $Link @('/entry:mainCRTStartup','/subsystem:console','/nodefaultlib','/machine:x64','/base:0x140000000','/dynamicbase',
     "$Out/smoke.obj","$Out/kernel32.lib","$Out/kyil-test.lib","/out:$Stage/windows-native-smoke.exe")
+Run $Clang @('-target','x86_64-pc-windows-msvc','-ffreestanding','-fno-builtin','-fno-stack-protector','-O2','-g','-c',"$Root/userspace/windows/tests/base_contracts_smoke.c",'-o',"$Out/base-contracts-smoke.obj")
+Run $Link @('/entry:mainCRTStartup','/subsystem:console','/nodefaultlib','/machine:x64',"$Out/base-contracts-smoke.obj","$Out/kernel32.lib","/out:$Stage/windows-base-contracts-smoke.exe")
+Run $Clang @('-target','x86_64-pc-windows-msvc','-ffreestanding','-fno-builtin','-fno-stack-protector','-O2','-g','-c',"$Root/userspace/windows/tests/winsock_smoke.c",'-o',"$Out/winsock-smoke.obj")
+Run $Link @('/entry:mainCRTStartup','/subsystem:console','/nodefaultlib','/machine:x64',"$Out/winsock-smoke.obj","$Out/kernel32.lib","/out:$Stage/windows-winsock-smoke.exe")
 $Bytes=[IO.File]::ReadAllBytes("$Stage/windows-native-smoke.exe")
 $Pe=[BitConverter]::ToUInt32($Bytes,60);$Opt=$Pe+24
 $Section=$Opt+[BitConverter]::ToUInt16($Bytes,$Pe+20)
@@ -81,6 +90,13 @@ foreach($CfgVariant in @('good','bad')) {
     Run $Clang (@('-target','x86_64-pc-windows-msvc','-c',"$Root/userspace/windows/tests/cfg_call.S",'-o',"$Out/cfg_$CfgVariant.obj")+$Defines)
     Run $Link @('/entry:mainCRTStartup','/subsystem:console','/nodefaultlib','/machine:x64','/include:_load_config_used',
         "$Out/cfg_smoke.obj","$Out/cfg_$CfgVariant.obj","$Out/kernel32.lib","/out:$Stage/windows-cfg-$CfgVariant.exe")
+}
+Run $Clang @('-target','x86_64-pc-windows-msvc','-c',"$Root/userspace/windows/tests/longjump_fixture.S",'-o',"$Out/longjump_fixture.obj")
+Run $Link @('/dll','/noentry','/machine:x64',"/def:$Root/userspace/windows/tests/ntdll.def","/out:$Out/ntdll.dll","/implib:$Out/ntdll.lib")
+foreach($Variant in @('good','bad1','bad2')) {
+    $Defines=@();if($Variant -eq 'bad1'){$Defines=@('-DLONGJUMP_BAD=1')};if($Variant -eq 'bad2'){$Defines=@('-DLONGJUMP_BAD=2')}
+    Run $Clang (@('-target','x86_64-pc-windows-msvc','-ffreestanding','-fno-builtin','-fno-stack-protector','-O2','-g','-funwind-tables','-fexceptions','-fasync-exceptions','-c',"$Root/userspace/windows/tests/longjump_smoke.c",'-o',"$Out/longjump_$Variant.obj")+$Defines)
+    Run $Link @('/entry:mainCRTStartup','/subsystem:console','/nodefaultlib','/machine:x64','/guard:cf','/guard:longjmp','/include:_load_config_used',"$Out/longjump_$Variant.obj","$Out/longjump_fixture.obj","$Out/kernel32.lib","$Out/ntdll.lib","/out:$Stage/windows-longjump-$Variant.exe")
 }
 Run $Clang @('-target','x86_64-pc-windows-msvc','-ffreestanding','-fno-builtin','-fno-stack-protector','-O2','-g','-c',"$Root/userspace/windows/tests/veh_smoke.c",'-o',"$Out/veh_smoke.obj")
 Run $Clang @('-target','x86_64-pc-windows-msvc','-c',"$Root/userspace/windows/tests/veh_fault.S",'-o',"$Out/veh_fault.obj")
@@ -166,7 +182,7 @@ foreach($Mode in @('parent','child')) {
     Run $Clang (@('-target','x86_64-pc-windows-msvc','-ffreestanding','-fno-builtin','-fno-stack-protector','-O2','-g','-c',"$Root/userspace/windows/tests/cwd_smoke.c",'-o',"$Out/cwd_$Mode.obj")+$Defines)
     Run $Link @('/entry:mainCRTStartup','/subsystem:console','/nodefaultlib','/machine:x64',"$Out/cwd_$Mode.obj","$Out/kernel32.lib","/out:$Stage/windows-cwd-$Mode.exe")
 }
-foreach($Fixture in @('file_batch','profile','contract_batch','async_contract','system_contract','file_lock','chrome_contract','private_heap','multiple_wait','namespace_mutation','affinity','memory_usage','process_memory_counter','rng','virtual_memory','multimedia','registry_win32','loader_lock','security_data','protected_pipe','startup_contract','handle_value','shared_event')) {
+foreach($Fixture in @('file_batch','profile','contract_batch','async_contract','system_contract','file_lock','chrome_contract','private_heap','multiple_wait','namespace_mutation','affinity','memory_usage','process_memory_counter','rng','virtual_memory','multimedia','registry_win32','loader_lock','security_data','protected_pipe','startup_contract','handle_value','shared_event','user_windows','token_query','altered_search')) {
     Run $Clang @('-target','x86_64-pc-windows-msvc','-ffreestanding','-fno-builtin','-fno-stack-protector','-O2','-g','-DKYIL_NATIVE_TEST','-Ikernel/include','-Iuserspace/libvex/include','-c',"$Root/userspace/windows/tests/${Fixture}_smoke.c",'-o',"$Out/${Fixture}_smoke.obj")
     Run $Link @('/entry:mainCRTStartup','/subsystem:console','/nodefaultlib','/machine:x64',"$Out/${Fixture}_smoke.obj","$Out/kernel32.lib","/out:$Stage/windows-$Fixture-smoke.exe")
 }
@@ -205,4 +221,18 @@ Run $Link @('/entry:mainCRTStartup','/subsystem:console','/nodefaultlib','/machi
 
 Run $Clang @('-target','x86_64-pc-windows-msvc','-ffreestanding','-fno-builtin','-fno-stack-protector','-O2','-g','-c',"$Root/userspace/windows/tests/loader_lock_probe.c",'-o',"$Out/loader_lock_probe.obj")
 Run $Link @('/dll','/entry:DllMain','/nodefaultlib','/machine:x64',"$Out/loader_lock_probe.obj","$Out/kernel32.lib","/out:$Stage/kyil-loader-lock-probe.dll")
+Run $Clang @('-target','x86_64-unknown-none-elf','-march=x86-64','-mno-avx','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-pie','-mno-red-zone','-O2','-g','-Wall','-Wextra','-I',"$Root/kernel/include",'-I',"$Root/userspace/libvex/include",'-c',"$Root/userspace/windows/user_service.c",'-o',"$Out/user-service.o")
+Run $ElfLink @('-static','-z','noexecstack','-e','_start','-Ttext=0x20000000','-o',"$Root/usr/lib/kyil-windows/user-service","$Out/start.S.o","$Out/native.c.o","$Out/user-service.o")
+
+
+New-Item -ItemType Directory -Force "$Stage/altered" | Out-Null
+foreach($Variant in @('local','shadow')) {
+    $Value=if($Variant -eq 'local'){321}else{777}
+    Run $Clang @('-target','x86_64-pc-windows-msvc','-ffreestanding','-fno-builtin','-fno-stack-protector','-O2',"-DALTERED_VALUE=$Value",'-c',"$Root/userspace/windows/tests/altered_library.c",'-o',"$Out/altered-$Variant.obj")
+    $Destination=if($Variant -eq 'local'){"$Stage/altered"}else{$Stage}
+    Run $Link @('/dll','/entry:DllMain','/nodefaultlib','/machine:x64',"$Out/altered-$Variant.obj","/out:$Destination/kyil-altered-leaf.dll","/implib:$Out/altered-$Variant.lib")
+}
+Run $Clang @('-target','x86_64-pc-windows-msvc','-ffreestanding','-fno-builtin','-fno-stack-protector','-O2','-DALTERED_TOP','-c',"$Root/userspace/windows/tests/altered_library.c",'-o',"$Out/altered-top.obj")
+Run $Link @('/dll','/entry:DllMain','/nodefaultlib','/machine:x64',"$Out/altered-top.obj","$Out/altered-local.lib","/out:$Stage/altered/top.dll")
+
 Write-Host 'Built native userspace runtime and direct PE/DLL smoke (no conversion).'

@@ -108,10 +108,49 @@ static int WR_WIN lstrcmpiA(const char *a,const char *b) {
         if(x!=y)return x<y?-1:1;}
     return *a?1:*b?-1:0;
 }
+static int WR_WIN CompareStringOrdinal(const uint16_t *a,int na,const uint16_t *b,int nb,int ignore_case){
+    if(!a || !b || na< -1 || nb< -1)return nls_error(87);
+    if(na==-1){na=0;while(a[na]){if(na==INT32_MAX-1)return nls_error(87);na++;}}
+    if(nb==-1){nb=0;while(b[nb]){if(nb==INT32_MAX-1)return nls_error(87);nb++;}}
+    /* UTF-16 code-unit ordering. The installed case table is BMP only;
+       don't pretend supplementary case folding is represented. */
+    if(ignore_case){for(int i=0;i<na;i++)if(a[i]>=0xd800 && a[i]<=0xdfff)return nls_error(50);
+        for(int i=0;i<nb;i++)if(b[i]>=0xd800 && b[i]<=0xdfff)return nls_error(50);}
+    for(int i=0;i<na && i<nb;i++){unsigned x=a[i],y=b[i];if(ignore_case){x=wr_unicode_case(x,1);y=wr_unicode_case(y,1);}if(x!=y)return x<y?1:3;}
+    return na==nb?2:(na<nb?1:3);
+}
+static unsigned WR_WIN LocaleNameToLCID(const uint16_t *name,unsigned flags){
+    if(flags&~0x08000000u){nls_error(1004);return 0;}
+    if(!name)return 0x409;
+    if(!name[0])return 0x7f;
+    const uint16_t expected[]={'e','n','-','U','S',0};
+    unsigned i=0;while(name[i] && expected[i] && wr_unicode_case(name[i],1)==wr_unicode_case(expected[i],1))i++;
+    if(!name[i] && !expected[i])return 0x409;
+    nls_error(87);return 0;
+}
+static int WR_WIN LCIDToLocaleName(unsigned locale,uint16_t *out,int count,unsigned flags){
+    if(count<0 || (!out && count) || (flags&~0x08000000u))return nls_error(87);
+    locale=locale_id(locale);const uint16_t en[]={'e','n','-','U','S',0};
+    if(locale!=0x409 && locale!=0x7f)return nls_error(87);unsigned need=locale==0x7f?1:6;
+    if(!count)return (int)need;if((unsigned)count<need)return nls_error(122);
+    if(locale==0x7f)*out=0;else memcpy(out,en,sizeof(en));return (int)need;
+}
+static int WR_WIN ResolveLocaleName(const uint16_t *locale,uint16_t *out,int count){
+    unsigned id=LocaleNameToLCID(locale,0);return id?LCIDToLocaleName(id,out,count,0):0;
+}
+static int WR_WIN GetLocaleInfoEx(const uint16_t *locale,unsigned type,uint16_t *out,int count){
+    unsigned id=LocaleNameToLCID(locale,0);return id?GetLocaleInfoW(id,type,out,count):0;
+}
+static int WR_WIN LCMapStringEx(const uint16_t *locale,unsigned flags,const uint16_t *source,int n,uint16_t *out,int cap,void *version,void *reserved,intptr_t param){
+    if(version || reserved || param)return nls_error(50);unsigned id=LocaleNameToLCID(locale,0);
+    return id?LCMapStringW(id,flags,source,n,out,cap):0;
+}
+static uint16_t WR_WIN GetUserDefaultUILanguage(void){return GetUserDefaultLangID();}
 void *wr_nls_exports(const char *name) {
 #define E(f) if(wr_equal(name,#f,0))return (void *)&f
     E(lstrcmpiA);E(lstrcmpiW);E(GetStringTypeW);E(LCMapStringW);E(GetLocaleInfoW);E(GetUserDefaultLCID);E(GetUserDefaultLangID);E(IsValidLocale);E(EnumSystemLocalesW);E(GetCPInfo);
     E(GetSystemDefaultLCID);E(GetThreadLocale);E(SetThreadLocale);E(GetUserDefaultLocaleName);E(EnumSystemLocalesEx);
+    E(CompareStringOrdinal);E(LocaleNameToLCID);E(LCIDToLocaleName);E(ResolveLocaleName);E(GetLocaleInfoEx);E(LCMapStringEx);E(GetUserDefaultUILanguage);
 #undef E
     if(wr_equal(name,"CompareStringW",0))return (void *)&CompareStringW;
     if(wr_equal(name,"GetACP",0))return (void *)&GetACP;

@@ -252,6 +252,7 @@ struct vex_web_fd_object {
     /* Kernel-private sparse shared pages, owned by the object, not a mapping.
      * No FD number or process identity participates in page ownership. */
     void *shared_mapping_pages;
+    struct fs_name_protection *name_protection; /* kernel-only, owned until final release */
 };
 
 #ifdef __cplusplus

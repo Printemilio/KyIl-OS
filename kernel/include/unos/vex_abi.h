@@ -293,6 +293,8 @@ typedef struct vex_message_observe_req {
 #define VEX_APP_EVENT_KEY_RAW       6u
 #define VEX_APP_EVENT_FOCUS         7u
 #define VEX_APP_EVENT_NOTIFY        8u /* Coalesced resource change; flags is a tag. */
+#define VEX_APP_NOTIFY_CONSOLE      1u /* Console output is waiting. */
+#define VEX_APP_NOTIFY_THEME        2u /* /etc/kyil/theme.conf changed: repaint. */
 #define VEX_APP_POINTER_LEFT        (1u << 0)
 #define VEX_APP_POINTER_RIGHT       (1u << 1)
 #define VEX_APP_POINTER_MIDDLE      (1u << 2)

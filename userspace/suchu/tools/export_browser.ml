@@ -3,7 +3,7 @@
 let () =
   Suchu_stdlib.register ();
   List.iter (fun name -> Runtime.register_native_module name [])
-    ["browser";"draw";"keys";"mouse";"chrome";"platform";"fileio";"textbytes";"clipboard"];
+    ["browser";"draw";"keys";"mouse";"chrome";"platform";"fileio";"textbytes";"clipboard";"theme"];
   let source=Sys.argv.(1) and destination=Sys.argv.(2) in
   let channel=open_in_bin source in
   let text=Fun.protect ~finally:(fun () -> close_in channel)

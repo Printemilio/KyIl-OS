@@ -29,7 +29,7 @@ export PATH="$ROOT/toolchain/bin:$PATH"
 
 # The library composition of upstream src/dune (suchu.core, suchu.eval and,
 # without http_backend, suchu).
-CORE="lexical ast parser_utils gui_parser parser gui_tree runtime native_api suchu_stdlib http_wire audio_analysis transpiler util"
+CORE="lexical ast parser_utils gui_parser parser os_theme gui_tree runtime native_api suchu_stdlib http_wire audio_analysis transpiler util"
 EVAL="interpreter"
 DESKTOP="fonts_data audio_backend gui_backend browser_backend platform_backend"
 STUBS="suchu_dwm_stubs suchu_path_stubs suchu_dialog_stubs browser_stubs platform_stubs"
@@ -53,7 +53,9 @@ for s in $STUBS; do cp "$ROOT/userspace/suchu/src/$s.c" .; done
 # tools/embed_fonts.exe on assets/fonts).
 FONTS="$ROOT/userspace/suchu/assets/fonts"
 "$HOST_OCAMLOPT" -o embed_fonts "$ROOT/userspace/suchu/tools/embed_fonts.ml"
-./embed_fonts "$FONTS/LiberationSans-Regular.ttf" "$FONTS/LiberationSans-Bold.ttf" \
+# Inter is the KyIlOS system typeface (the desktop shell and the Figma frames
+# use it); Liberation Mono stays for code and the terminal.
+./embed_fonts "$FONTS/Inter-Regular.ttf" "$FONTS/Inter-SemiBold.ttf" \
     "$FONTS/LiberationMono-Regular.ttf" > fonts_data.ml
 
 # Compile in dependency order.

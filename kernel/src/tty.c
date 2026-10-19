@@ -338,7 +338,24 @@ void tty_init(void) {
 
 void tty_putchar(char c) {
     GUI_GUARD;
+    /* CSI sequences (colours of `help`) are for the terminal application;
+       the bitmap console only skips them. 0 text, 1 ESC, 2 inside CSI. */
+    static uint8_t escape_state;
     console_emit(c);
+    if (escape_state == 1u) {
+        escape_state = c == '[' ? 2u : 0u;
+        return;
+    }
+    if (escape_state == 2u) {
+        if ((unsigned char)c >= 64u && (unsigned char)c <= 126u) {
+            escape_state = 0u;
+        }
+        return;
+    }
+    if (c == '\033') {
+        escape_state = 1u;
+        return;
+    }
     if (tty_framebuffer == NULL || columns == 0 || rows == 0) {
         return;
     }

@@ -10,6 +10,12 @@ typedef struct {
 } __attribute__((aligned(16))) win_context;
 typedef struct {uint32_t code,flags;void *nested,*address;uint32_t count,pad;uint64_t arguments[15];} exception_record;
 typedef struct {exception_record *record;win_context *context;} exception_pointers;
+typedef struct {
+    uint64_t frame,rbx,rsp,rbp,rsi,rdi,r12,r13,r14,r15,rip;
+    uint32_t mxcsr;uint16_t fpcsr,spare;
+    uint8_t xmm[10][16];
+} wr_jump_buffer;
+_Static_assert(sizeof(wr_jump_buffer)==256 && offsetof(wr_jump_buffer,xmm)==96,"AMD64 _JUMP_BUFFER");
 _Static_assert(sizeof(win_context)==0x4d0,"Windows AMD64 CONTEXT");
 _Static_assert(offsetof(win_context,rax)==0x78 && offsetof(win_context,rip)==0xf8 && offsetof(win_context,fp)==0x100,"CONTEXT registers");
 typedef struct {uint32_t begin,end,unwind;} runtime_function;

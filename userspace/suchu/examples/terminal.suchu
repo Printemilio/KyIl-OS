@@ -1,82 +1,235 @@
 import "terminal_model.suchu";
 import platform; import draw; import chrome; import textbytes;
 import clipboard;
-d=terminal_model.create(); attached=false; busy=false; notice=""; rows=18; columns=80;
-cached_revision=-1; cached_columns=-1; visual=[];
+// The KyIl terminal: one quiet canvas. The shell's prompt ("KyIl-OS $ ") is
+// followed by the line being typed and a blinking "_" caret; colours sent by
+// commands (SGR) are painted with the system theme, so `help` looks right in
+// both the dark and the light palette.
+//   Enter run · ↑/↓ history · ←/→ Home End edit · PgUp/PgDn or wheel scroll
+//   Ctrl+L clear view · Ctrl+Shift+C copy output · Ctrl+V paste · Esc clear line
+d=terminal_model.create(); attached=false; busy=false; notice=""; notice_at=0;
+rows=18; columns=80; line=""; caret=0; blink_at=0;
+cached_revision=-1; cached_columns=-1; cached_busy=false; cached_input=""; cached_caret=-1;
+visual=[]; caret_row=0; caret_col=0; scrolled_at=-10;
+esc=textbytes.character(27);
+fun say(text) { notice=text; notice_at=platform.monotonic(); }
+// The shell prints its prompt after each command, not before the first one:
+// until it has, the terminal shows the same prompt itself.
+prompt="KyIl-OS $ ";
+fun prompt_missing() { return !busy && d.lines[len(d.lines)-1]==""; }
 fun submit() {
-  text=get_text(command);
-  if busy { notice="A native command is still running"; return; }
+  if busy { say("A command is still running"); return; }
+  text=line;
   if text.trim()=="" { return; }
   try {
+    if prompt_missing() { terminal_model.feed(d,prompt); }
     platform.console_submit(text); terminal_model.remember(d,text);
-    set_text(command,""); busy=true; d.follow=true; notice="Executing native command";
-  } else error { notice=error.message; }
+    line=""; caret=0; busy=true; d.follow=true;
+  } else error { say(error.message); }
+}
+fun type_text(text) { line=textbytes.sub(line,0,caret) @ text @ textbytes.sub(line,caret,len(line)-caret); caret=caret+len(text); }
+fun erase_before() {
+  if caret==0 { return; }
+  at=textbytes.prev(line,caret); line=textbytes.sub(line,0,at) @ textbytes.sub(line,caret,len(line)-caret); caret=at;
+}
+fun erase_after() {
+  if caret>=len(line) { return; }
+  at=textbytes.next(line,caret); line=textbytes.sub(line,0,caret) @ textbytes.sub(line,at,len(line)-at);
+}
+fun recall(text) { line=text; caret=len(line); }
+// The output without its colour codes, for the clipboard.
+fun plain_copy() {
+  out=[];
+  for text in d.lines {
+    clean=""; at=0; run=0;
+    while at<len(text) {
+      if textbytes.byte(text,at)==27 {
+        clean=clean @ textbytes.sub(text,run,at-run); stop=at+2;
+        while stop<len(text) && (textbytes.byte(text,stop)<64 || textbytes.byte(text,stop)>126) { stop=stop+1; }
+        at=stop+1; run=at;
+      } else { at=at+1; }
+    }
+    if run<len(text) { clean=clean @ textbytes.sub(text,run,len(text)-run); }
+    push(out,clean);
+  }
+  return "\n".join(out);
+}
+fun paste() {
+  try {
+    text=clipboard.read();
+    // A pasted line is one command: control characters would end it early.
+    clean=""; at=0;
+    while at<len(text) {
+      next=textbytes.next(text,at); piece=textbytes.sub(text,at,next-at);
+      if textbytes.byte(text,at)>=32 { clean=clean @ piece; } else { clean=clean @ " "; }
+      at=next;
+    }
+    type_text(clean);
+  } else error { say(error.message); }
+}
+fun scroll_by(n) { d.follow=false; d.top=max(0,d.top+n); scrolled_at=platform.monotonic(); }
+fun key(e) {
+  pressed=e[1]%2==1; if !pressed { return; }
+  mods=round(floor(e[1]/256))%256; ctrl=mods%2==1; shift=round(floor(mods/2))%2==1;
+  k=e[2]; hw=e[3]; blink_at=platform.monotonic();
+  if ctrl {
+    if k==108 || k==76 { terminal_model.clear(d); }
+    if (k==99 || k==67) && shift { clipboard.write(plain_copy()); say("Output copied"); }
+    if k==118 || k==86 { paste(); }
+    return;
+  }
+  if hw==200 { recall(terminal_model.previous(d,line)); return; }
+  if hw==208 { recall(terminal_model.next(d)); return; }
+  if hw==201 { scroll_by(-rows); return; }
+  if hw==209 { scroll_by(rows); return; }
+  if hw==203 { if caret>0 { caret=textbytes.prev(line,caret); } return; }
+  if hw==205 { if caret<len(line) { caret=textbytes.next(line,caret); } return; }
+  if hw==199 { caret=0; return; }
+  if hw==207 { caret=len(line); return; }
+  if hw==211 { erase_after(); return; }
+  if k==8 { erase_before(); return; }
+  if k==10 || k==13 { submit(); return; }
+  if k==27 { line=""; caret=0; return; }
+  if k>=32 && k!=127 && k<1114112 { d.follow=true; type_text(textbytes.character(k)); }
 }
 fun pump() {
   if !attached {
-    try { if !platform.console_attach() { chrome.close(); return; } attached=true; focus(command); }
-    else error { notice=error.message; return; }
+    try {
+      if !platform.console_attach() { chrome.close(); return; }
+      attached=true;
+      terminal_model.feed(d,esc @ "[90mKyIl-OS terminal  ·  type " @ esc @ "[35mhelp" @ esc @ "[90m to explore" @ esc @ "[0m\n\n");
+    }
+    else error { say(error.message); return; }
   }
   for i in 0..15 {
-    result=platform.console_read(); was_busy=busy; busy=result[1]%2==1;
-    if was_busy && !busy { notice=""; if platform.focused() { focus(command); } }
+    result=platform.console_read(); busy=result[1]%2==1;
     if round(floor(result[1]/2))%2==1 { terminal_model.feed(d,"\n[Console output exceeded its 64 KiB queue; oldest bytes lost]\n"); }
     terminal_model.feed(d,result[0]); if len(result[0])==0 { break; }
   }
 }
+// raylib's start-up chatter is not the user's business.
+fun noise(text) {
+  return text.startswith("INFO: RLSW") || text.startswith("INFO: DISPLAY") ||
+    text.startswith("INFO: PLATFORM") || text.startswith("WARNING: FONT");
+}
+// Wraps the output into rows of `columns` cells. Colour codes take no cell
+// and the last one seen carries over to the next row of the same line. The
+// line being typed is part of the last row, after the prompt.
+fun wrap(lines) {
+  out=[]; caret_row=0; caret_col=0; last=len(lines)-1;
+  for n in 0..last {
+    text=lines[n]; mark=-1;
+    // Also when an application printed it right after a prompt.
+    if n!=last && (noise(text) || (text.startswith(prompt) && noise(textbytes.sub(text,len(prompt),len(text)-len(prompt))))) { continue; }
+    if n==last {
+      if attached && prompt_missing() { text=prompt; }
+      mark=len(text)+caret; text=text @ line;
+    }
+    if text=="" { if n==last { caret_row=len(out); caret_col=0; } push(out,""); continue; }
+    at=0; start=0; count=0; active=""; carried="";
+    while at<len(text) {
+      if at==mark { caret_row=len(out); caret_col=count; }
+      if textbytes.byte(text,at)==27 {
+        stop=at+2;
+        while stop<len(text) && (textbytes.byte(text,stop)<64 || textbytes.byte(text,stop)>126) { stop=stop+1; }
+        if stop<len(text) && textbytes.byte(text,stop)==109 { active=textbytes.sub(text,at,stop+1-at); }
+        at=stop+1; continue;
+      }
+      at=textbytes.next(text,at); count=count+1;
+      if count==columns {
+        push(out,carried @ textbytes.sub(text,start,at-start)); start=at; count=0; carried=active;
+      }
+    }
+    if at==mark { caret_row=len(out); caret_col=count; }
+    stop=min(at,len(text));
+    if stop>start || n==last { push(out,carried @ textbytes.sub(text,start,stop-start)); }
+  }
+  return out;
+}
+fun cells(text) { n=0; at=0; while at<len(text) { at=textbytes.next(text,at); n=n+1; } return n; }
+// SGR parameters to theme tokens: the eight ANSI hues become the palette's
+// accent, blue, success, warning and danger, so colours follow the theme.
+fun ink_for(params, ink) {
+  for p in params.split(";") {
+    if p=="" || p=="0" || p=="39" || p=="22" || p=="37" || p=="97" { ink="text"; }
+    else if p=="2" { ink="muted"; }
+    else if p=="30" || p=="90" { ink="faint"; }
+    else if p=="31" || p=="91" { ink="danger"; }
+    else if p=="32" || p=="92" { ink="success"; }
+    else if p=="33" || p=="93" { ink="warning"; }
+    else if p=="34" || p=="94" || p=="36" || p=="96" { ink="accent2"; }
+    else if p=="35" || p=="95" { ink="accent"; }
+  }
+  return ink;
+}
+fun paint_row(x, y, row, size, cell) {
+  ink="text"; col=0;
+  // The prompt, wherever it starts a row: name in the accent, "$" quiet.
+  if row.startswith(prompt) {
+    draw.text(x,y,"KyIl-OS",size,"accent"); draw.text(x+8*cell,y,"$",size,"muted");
+    row=textbytes.sub(row,len(prompt),len(row)-len(prompt)); col=len(prompt);
+  }
+  at=0; run=0;
+  while at<len(row) {
+    if textbytes.byte(row,at)==27 {
+      if at>run { piece=textbytes.sub(row,run,at-run); draw.text(x+col*cell,y,piece,size,ink); col=col+cells(piece); }
+      stop=at+2;
+      while stop<len(row) && (textbytes.byte(row,stop)<64 || textbytes.byte(row,stop)>126) { stop=stop+1; }
+      if stop<len(row) && textbytes.byte(row,stop)==109 { ink=ink_for(textbytes.sub(row,at+2,stop-at-2),ink); }
+      at=stop+1; run=at;
+    } else { at=at+1; }
+  }
+  if run<len(row) { draw.text(x+col*cell,y,textbytes.sub(row,run,len(row)-run),size,ink); }
+}
 fun paint() {
-  try { pump(); } else error { notice=error.message; }
+  try { pump(); } else error { say(error.message); }
   bounds=get_bounds(output);
   for e in platform.events() {
-    if e[0]==6 && e[1]%2==1 {
-      if e[3]==200 && is_focused(command) { set_text(command,terminal_model.previous(d,get_text(command))); }
-      if e[3]==208 && is_focused(command) { set_text(command,terminal_model.next(d)); }
-      if e[3]==201 { d.follow=false; d.top=max(0,d.top-rows); }
-      if e[3]==209 { d.top=d.top+rows; }
-    }
+    if e[0]==6 { key(e); }
     if e[0]==5 && e[2]>=bounds[0] && e[2]<bounds[0]+bounds[2] && e[3]>=bounds[1] && e[3]<bounds[1]+bounds[3] && e[4]!=0 {
-      d.follow=false; d.top=max(0,d.top-e[4]*3);
+      scroll_by(-e[4]*3);
     }
   }
-  draw.font("mono"); cell=max(1,draw.measure("M",15)); columns=max(1,round(floor((draw.width()-24)/cell)));
-  rows=max(1,round(floor((draw.height()-16)/21)));
-  if cached_revision!=d.revision || cached_columns!=columns {
-   visual=[];
-   for line in d.lines {
-    if line=="" { push(visual,""); }
-    else {
-      at=0; start=0; count=0;
-      while at<len(line) {
-        at=textbytes.next(line,at); count=count+1;
-        if count==columns { push(visual,textbytes.sub(line,start,at-start)); start=at; count=0; }
-      }
-      if at>start { push(visual,textbytes.sub(line,start,at-start)); }
-    }
-   }
-   cached_revision=d.revision; cached_columns=columns;
+  draw.font("mono"); size=15; cell=max(1,draw.measure("M",size)); height=22; left=18; top_pad=12;
+  columns=max(1,round(floor((draw.width()-left*2)/cell)));
+  rows=max(1,round(floor((draw.height()-top_pad*2)/height)));
+  if cached_revision!=d.revision || cached_columns!=columns || cached_input!=line || cached_caret!=caret || cached_busy!=busy {
+    visual=wrap(d.lines);
+    cached_revision=d.revision; cached_columns=columns; cached_input=line; cached_caret=caret; cached_busy=busy;
   }
   if d.follow { d.top=max(0,len(visual)-rows); }
   d.top=max(0,min(d.top,max(0,len(visual)-rows)));
   if d.top==max(0,len(visual)-rows) { d.follow=true; }
-  draw.clear(1184276); stop=min(len(visual),d.top+rows);
-  if stop>d.top { for i in d.top..(stop-1) { draw.text(12,8+(i-d.top)*21,visual[i],15,15658734); } }
-  set_text(status,(if busy then "Native command running" else "Native shell ready") @ " · " @ notice);
-  set_enabled(command,attached && !busy); set_enabled(send,attached && !busy);
+  draw.clear("window"); stop=min(len(visual),d.top+rows);
+  if stop>d.top { for i in d.top..(stop-1) { paint_row(left,top_pad+(i-d.top)*height,visual[i],size,cell); } }
+  // The caret: a solid "_" while typing, blinking at rest, hidden while a
+  // command runs or the window is in the background.
+  now=platform.monotonic();
+  if attached && !busy && platform.focused() && caret_row>=d.top && caret_row<stop {
+    if now-blink_at<0.6 || round(floor((now-blink_at)/0.55))%2==0 {
+      draw.text(left+caret_col*cell,top_pad+(caret_row-d.top)*height,"_",size,"accent");
+    }
+    platform.wake_after(550);
+  }
+  // An overlay scroll indicator, macOS style: shown while scrolled back or
+  // for a moment after scrolling, never taking a column from the text.
+  if len(visual)>rows && (!d.follow || now-scrolled_at<1.2) {
+    track=draw.height()-16; thumb=max(28,track*rows/len(visual));
+    y=8+(track-thumb)*d.top/max(1,len(visual)-rows);
+    draw.round_rect(draw.width()-9,y,5,thumb,3,"faint");
+    if d.follow { platform.wake_after(400); }
+  }
+  if notice!="" {
+    if now-notice_at>4 { notice=""; } else {
+      draw.font("regular"); w=draw.measure(notice,12);
+      draw.round_rect(draw.width()-w-34,draw.height()-36,w+20,26,13,"panel");
+      draw.text(draw.width()-w-24,draw.height()-30,notice,12,"muted"); platform.wake_after(1000);
+    }
+  }
 }
 platform.install(false);
-Window("KyIl Terminal",860px,540px) {
-  min-width: 360px; min-height: 240px; padding: 0px; spacing: 0px; layout: column; background: #121214; exit-key: "none"; max-fps: 0;
-  Row { width: fill; height: 34px; padding: 4px; spacing: 6px; background: #202024;
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Clear view"; height: 25px; onClick: { terminal_model.clear(d); }; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Copy output"; height: 25px; onClick: { clipboard.write("\n".join(d.lines)); }; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Follow output"; height: 25px; onClick: { d.follow=true; }; }
-    Label { text: "KyIlOS native command service"; color: #bdb3ce; font-size: 12px; }
-  }
-  Canvas { id: "output"; width: fill; height: fill; onDraw: { paint(); }; }
-  Row { width: fill; height: 42px; padding: 6px; spacing: 6px; background: #202024;
-    Label { text: "›"; width: 18px; color: #aa88ff; }
-    Input { id: "command"; width: fill; height: 28px; font-size: 15px; font-family: "mono"; color: #eeeeee; background: #121214; placeholder: "help, top, shutdown, run…"; onChange: { submit(); }; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; id: "send"; text: "Run"; height: 28px; onClick: { submit(); }; }
-  }
-  Label { id: "status"; width: fill; height: 25px; padding: 4px; font-size: 12px; color: #bdb3ce; text: "Connecting…"; }
+Window("KyIl Terminal",980px,620px) {
+  min-width: 360px; min-height: 240px; padding: 0px; spacing: 0px; layout: column;
+  background: window; color: text; exit-key: "none"; max-fps: 0;
+  Canvas { id: "output"; width: fill; height: fill; background: window; onDraw: { paint(); }; }
 }

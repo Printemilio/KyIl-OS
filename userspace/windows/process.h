@@ -51,6 +51,7 @@ int wr_namespace_open_native(const char *,unsigned);
 int wr_namespace_set_cwd(const uint16_t *);
 int wr_cwd_resource(const uint16_t *,uint16_t *,size_t);
 int wr_namespace_image(const uint16_t *,uint16_t *,size_t,char *,size_t);
+int wr_namespace_project_path(const char *,uint16_t *,size_t);
 int wr_profile_folder(unsigned,uint16_t *,size_t);
 const uint16_t *wr_environment_block(void);
 int wr_environment_snapshot(uint16_t *,size_t);

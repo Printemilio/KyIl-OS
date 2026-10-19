@@ -36,9 +36,12 @@ int wr_main(uint64_t argc,char **argv) {
        run("/usr/pe-tests/windows-cfg-good.exe",0) || run("/usr/pe-tests/windows-cfg-bad.exe",0xc0000409u) ||
        run("/usr/pe-tests/windows-namespace-events.exe",0))goto fail;
     if(run("/usr/pe-tests/windows-file-smoke.exe",0) || run("/usr/pe-tests/windows-iocp-smoke.exe",0) || run("/usr/native-tests/native_execution_test",0))goto fail;
+    if(run("/usr/native-tests/native_file_protection",0))goto fail;
     if(run("/usr/pe-tests/windows-mutex-critical.exe",0))goto fail;
     if(run("/usr/pe-tests/windows-startup_contract-smoke.exe",0))goto fail;
     if(run("/usr/pe-tests/windows-shared_event-smoke.exe",0))goto fail;
+    if(run("/usr/pe-tests/windows-user_windows-smoke.exe",0) || run("/usr/pe-tests/windows-token_query-smoke.exe",0))goto fail;
+    if(run("/usr/pe-tests/windows-altered_search-smoke.exe",0))goto fail;
     if(run("/usr/pe-tests/windows-handle_value-smoke.exe",0))goto fail;
     for(unsigned cycle=0;cycle<6;cycle++)if(run("/usr/pe-tests/windows-affinity-exit.exe",17))goto fail;
     if(run("/usr/pe-tests/windows-multiple_wait-smoke.exe",0) || run("/usr/pe-tests/windows-multiple-wait-exit.exe",17))goto fail;
@@ -63,6 +66,7 @@ int wr_main(uint64_t argc,char **argv) {
     if(run("/usr/pe-tests/windows-cwd-parent.exe",0) || run("/usr/pe-tests/windows-process_memory_counter-smoke.exe",0))goto fail;
     if(run("/usr/pe-tests/windows-times-parent.exe",0) || run("/usr/pe-tests/windows-memory_usage-smoke.exe",0))goto fail;
     if(run("/usr/pe-tests/windows-namespace_mutation-smoke.exe",0) || run("/usr/pe-tests/windows-affinity-smoke.exe",0))goto fail;
+    if(run("/usr/pe-tests/windows-base-contracts-smoke.exe",0) || run("/usr/pe-tests/windows-winsock-smoke.exe",0))goto fail;
     if(run("/usr/pe-tests/windows-memory-query-smoke.exe",0))goto fail;
     if(run("/usr/pe-tests/windows-virtual_memory-smoke.exe",0))goto fail;
     if(run("/usr/pe-tests/windows-unwind-smoke.exe",0))goto fail;
@@ -72,6 +76,8 @@ int wr_main(uint64_t argc,char **argv) {
     if(run("/usr/pe-tests/windows-fls-smoke.exe",0))goto fail;
     if(run("/usr/pe-tests/windows-file_batch-smoke.exe",0) || run("/usr/pe-tests/windows-profile-smoke.exe",0))goto fail;
     if(run("/usr/pe-tests/windows-seh-smoke.exe",0))goto fail;
+    if(run("/usr/pe-tests/windows-longjump-good.exe",0) || run("/usr/pe-tests/windows-longjump-bad1.exe",0xc0000409u) ||
+       run("/usr/pe-tests/windows-longjump-bad2.exe",0xc0000409u))goto fail;
     if(run("/usr/pe-tests/windows-slist-smoke.exe",0))goto fail;
     if(run("/usr/pe-tests/windows-registry-parent.exe",0))goto fail;
     if(run("/usr/pe-tests/windows-registry_win32-smoke.exe",0))goto fail;

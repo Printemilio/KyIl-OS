@@ -5,6 +5,7 @@ typedef struct {unsigned size,pad;void *root;unicode *name;unsigned flags,pad2;v
 __declspec(dllimport) unsigned NtCreateKey(void **,unsigned,attributes *,unsigned,unicode *,unsigned,unsigned *),NtOpenKeyEx(void **,unsigned,attributes *,unsigned),NtDeleteKey(void *),NtSetValueKey(void *,unicode *,unsigned,unsigned,const void *,unsigned),NtQueryValueKey(void *,unicode *,unsigned,void *,unsigned,unsigned *),NtClose(void *),RtlFormatCurrentUserKeyPath(unicode *);
 __declspec(dllimport) void RtlInitUnicodeString(unicode *,const W *),RtlFreeUnicodeString(unicode *);
 __declspec(dllimport) unsigned GetCurrentProcessId(void),WaitForSingleObject(void *,unsigned);
+__declspec(dllimport) unsigned GetLastError(void);
 __declspec(dllimport) int CloseHandle(void *),GetExitCodeProcess(void *,unsigned *),CreateProcessW(const W *,W *,void *,void *,int,unsigned,void *,const W *,void *,void *);
 __declspec(dllimport) void OutputDebugStringA(const char *),ExitProcess(unsigned);
 static void check(int ok,const char *why){if(!ok){OutputDebugStringA(why);ExitProcess(1);}}
@@ -46,7 +47,11 @@ void mainCRTStartup(void) {
     process_info children[4];startup si={0};si.size=sizeof(si);
     for(unsigned i=0;i<4;i++){W command[]={ 'r','e','g','i','s','t','r','y',' ',(W)('0'+i),0};
         check(CreateProcessW((const W *)L"A:\\windows-registry-child.exe",command,0,0,0,0,0,0,&si,&children[i]),"registry: child process launch FAIL\n");}
-    for(unsigned i=0;i<4;i++){unsigned status=99;check(!WaitForSingleObject(children[i].process,0xffffffffu) && GetExitCodeProcess(children[i].process,&status) && !status && CloseHandle(children[i].thread) && CloseHandle(children[i].process),"registry: concurrent producer completion FAIL\n");}
+    for(unsigned i=0;i<4;i++){unsigned status=99,wait=WaitForSingleObject(children[i].process,0xffffffffu),error=GetLastError();
+        int queried=!wait && GetExitCodeProcess(children[i].process,&status);
+        if(wait || !queried || status){char detail[]="registry: producer wait/status/error=00000000/00000000/00000000\n";
+            unsigned values[]={wait,status,error};for(unsigned j=0;j<3;j++)for(unsigned k=0;k<8;k++)detail[37+j*9+k]="0123456789abcdef"[(values[j]>>(28-4*k))&15];OutputDebugStringA(detail);}
+        check(!wait && queried && !status && CloseHandle(children[i].thread) && CloseHandle(children[i].process),"registry: concurrent producer completion FAIL\n");}
     for(unsigned index=0;index<4;index++){W n[]={ 'P','r','o','d','u','c','e','r','-',(W)('0'+index),'-','0','0',0};
         for(unsigned i=0;i<24;i++){n[11]=(W)('0'+i/10);n[12]=(W)('0'+i%10);check(get(h,n)==index*100+i,"registry: lost cross-process update FAIL\n");}}
     unsigned disposition;void *victim=create(h,(const W *)L"Deleted-Recreated",&disposition);put(victim,(const W *)L"v",17);

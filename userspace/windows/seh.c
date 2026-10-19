@@ -12,6 +12,16 @@ extern void WR_WIN wr_unwind_entry(void *,void *,exception_record *,void *);
 extern void WR_WIN wr_unwind_ex_entry(void *,void *,exception_record *,void *,win_context *,void *);
 extern _Noreturn void wr_restore_context_raw(win_context *);
 static int execute(uint64_t pc){vex_memory_view_info_t v;return !wr_memory_query(pc,&v) && (v.permissions&PE_X);}
+static void read_jump(const exception_record *record,wr_jump_buffer *jump) {
+    if(record->count!=1 || !record->arguments[0] || wr_memory_copy(jump,(void *)(uintptr_t)record->arguments[0],sizeof(*jump)))wr_exit(0xc000000du);
+    if(!wr_longjump_allowed(jump->rip)){wr_log("windows-longjump: invalid hardened target\n");wr_exit(0xc0000409u);}
+}
+static void jump_context(win_context *c,const wr_jump_buffer *j) {
+    c->rbx=j->rbx;c->rsp=j->rsp;c->rbp=j->rbp;c->rsi=j->rsi;c->rdi=j->rdi;
+    c->r12=j->r12;c->r13=j->r13;c->r14=j->r14;c->r15=j->r15;c->rip=j->rip;
+    c->mxcsr=j->mxcsr;memcpy(c->fp,&j->fpcsr,2);memcpy(c->fp+24,&j->mxcsr,4);
+    memcpy(c->fp+160+6*16,j->xmm,sizeof(j->xmm));c->flags|=8;
+}
 _Noreturn void wr_restore_context(win_context *source) {
     win_context c;if(wr_memory_copy(&c,source,sizeof(c)) || (c.flags&~0x10000fu) || (c.flags&0x100003)!=0x100003 || !execute(c.rip) || c.rsp<8)wr_exit(0xc000000du);
     uint16_t cs,ss;__asm__ volatile("mov %%cs,%0;mov %%ss,%1":"=r"(cs),"=r"(ss));
@@ -52,7 +62,7 @@ static int step(unsigned type,win_context *c,win_context *next,dispatcher *d) {
     if(d->frame<low || d->frame>=high || next->rsp<=c->rsp || next->rsp>high)wr_exit(0xc0000028u);
     return 1;
 }
-static _Noreturn void unwind_to(uint64_t target,uint64_t ip,exception_record *record,uint64_t value,win_context *origin,win_context *out) {
+static _Noreturn void unwind_to(uint64_t target,uint64_t ip,exception_record *record,uint64_t value,win_context *origin,win_context *out,const wr_jump_buffer *jump) {
     win_context c=*origin,next;exception_record local;
     if(!record){local=(exception_record){.code=0xc0000027u,.address=(void *)(uintptr_t)c.rip};record=&local;}
     unsigned original_flags=record->flags;record->flags|=2;if(!target)record->flags|=4;
@@ -63,6 +73,7 @@ static _Noreturn void unwind_to(uint64_t target,uint64_t ip,exception_record *re
         if(d.handler){int32_t disposition=((language_handler)d.handler)(record,d.frame,&c,&d);
             if(disposition!=1){wr_log("windows-seh: unsupported unwind disposition\n");wr_exit(0xc0000026u);}}
         if(reached){c.rsp=d.frame;c.rip=ip;c.rax=value;record->flags=original_flags;
+            if(jump)jump_context(&c,jump);
             if(out && wr_memory_copy(out,&c,sizeof(c)))wr_exit(0xc0000005u);wr_restore_context(&c);}
         c=next;
     }
@@ -115,7 +126,7 @@ static int32_t WR_WIN __C_specific_handler(exception_record *record,uint64_t fra
             if(result<0)return 0;
             if(result>0){wr_thread *t=(void *)wr_current_teb();dispatch_state *state=t->seh_state;
                 if(!state || !state->origin || !execute(d->base+entry.jump))wr_exit(0xc0000026u);
-                unwind_to(frame,d->base+entry.jump,record,record->code,state->origin,0);}
+                unwind_to(frame,d->base+entry.jump,record,record->code,state->origin,0,0);}
         }
     }return 1;
 }
@@ -136,15 +147,25 @@ _Noreturn void wr_raise_api(unsigned code,unsigned flags,unsigned count,const ui
 }
 _Noreturn void wr_unwind_api(void *target,void *ip,exception_record *record,void *value,win_context *out,void *history,win_context *captured) {
     (void)history;exception_record local;if(record){if(wr_memory_copy(&local,record,sizeof(local)))wr_exit(0xc0000005u);record=&local;}
-    unwind_to((uintptr_t)target,(uintptr_t)ip,record,(uintptr_t)value,captured,out);
+    wr_jump_buffer jump,*saved=0;if(record && record->code==0x80000026u){read_jump(record,&jump);saved=&jump;}
+    unwind_to((uintptr_t)target,(uintptr_t)ip,record,(uintptr_t)value,captured,out,saved);
 }
 static void WR_WIN RtlRestoreContext(win_context *context,exception_record *record) {
-    if(record)wr_exit(0xc00000bbu); /* LONGJUMP/UNWIND_CONSOLIDATE protocols remain explicit. */
-    wr_restore_context(context);
+    win_context c;if(wr_memory_copy(&c,context,sizeof(c)))wr_exit(0xc0000005u);
+    if(record){exception_record r;wr_jump_buffer jump;
+        if(wr_memory_copy(&r,record,sizeof(r)))wr_exit(0xc0000005u);
+        if(r.code!=0x80000026u)wr_exit(0xc00000bbu); /* UNWIND_CONSOLIDATE remains explicit */
+        read_jump(&r,&jump);jump_context(&c,&jump);}
+    wr_restore_context(&c);
+}
+static int WR_WIN GuardCheckLongJumpTarget(void *target,unsigned flags) {
+    if(flags&~1u){wr_current_teb()->last_error=87;return 0;}
+    int valid=wr_longjump_allowed((uintptr_t)target);
+    if(!valid && !(flags&1u))wr_exit(0xc0000409u);return valid;
 }
 void *wr_seh_exports(const char *name) {
 #define E(f) if(wr_equal(name,#f,0))return (void *)&f
-    E(SetUnhandledExceptionFilter);E(UnhandledExceptionFilter);E(__C_specific_handler);E(RtlRestoreContext);
+    E(SetUnhandledExceptionFilter);E(UnhandledExceptionFilter);E(__C_specific_handler);E(RtlRestoreContext);E(GuardCheckLongJumpTarget);
 #undef E
     if(wr_equal(name,"RaiseException",0))return (void *)&wr_raise_entry;
     if(wr_equal(name,"RtlUnwind",0))return (void *)&wr_unwind_entry;

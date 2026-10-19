@@ -60,6 +60,8 @@ void gui_state_end(gui_state_guard_t *g) {
 #include <unos/users.h>
 #include <unos/vex_abi.h>
 #include "vex_font_inter.h"
+#include <unos/ui_brand.h>
+#include <unos/ui_theme.h>
 
 #include <lvgl.h>
 
@@ -77,7 +79,7 @@ void gui_state_end(gui_state_guard_t *g) {
 #define GUI_CLOCK_UPDATE_TICKS 100ull
 #define GUI_WINDOW_CONTROL_RADIUS 7ull
 #define GUI_CONTEXT_MENU_WIDTH 250ull
-#define GUI_CONTEXT_MENU_HEIGHT 282ull
+#define GUI_CONTEXT_MENU_HEIGHT 320ull /* 8 + 8 rows x 38 + 8 */
 #define GUI_CONTEXT_MENU_ROW_HEIGHT 38ull
 #define GUI_CONTEXT_MENU_PAD 8ull
 #define GUI_DIRTY_RECT_MAX 96u
@@ -313,6 +315,10 @@ static void draw_rounded_border(uint64_t x, uint64_t y, uint64_t w, uint64_t h, 
 static void draw_wallpaper_rect(uint64_t x, uint64_t y, uint64_t w, uint64_t h);
 static void blit_rgba_icon(uint64_t x, uint64_t y,
                            const uint8_t *data, uint64_t iw, uint64_t ih);
+static void blit_alpha_mask(uint64_t x, uint64_t y, const uint8_t *mask, uint64_t step,
+                            uint64_t iw, uint64_t ih, uint32_t color);
+static void blend_rounded_rect(uint64_t x, uint64_t y, uint64_t w, uint64_t h,
+                               uint64_t r, uint32_t color, uint8_t alpha);
 static void draw_taskbar_brand(void);
 static void draw_main_window_frame(const char *title);
 static void draw_window_frame_at(uint64_t x, uint64_t y, uint64_t w, uint64_t h, const char *title);
@@ -545,6 +551,15 @@ static uint32_t blend_color(uint32_t under, uint32_t over, uint8_t alpha, uint8_
         (uint8_t)((color_g(under) * inv + color_g(over) * alpha) / max_alpha),
         (uint8_t)((color_b(under) * inv + color_b(over) * alpha) / max_alpha)
     );
+}
+
+/* Theme colours are 0xRRGGBB; the scene speaks the framebuffer's format. */
+static uint32_t theme_px(uint32_t rgb) {
+    return pack_color((uint8_t)(rgb >> 16), (uint8_t)(rgb >> 8), (uint8_t)rgb);
+}
+
+uint32_t gui_theme_color(uint32_t rgb) {
+    return theme_px(rgb);
 }
 
 static int rects_touch_or_overlap(const gui_rect_t *left, const gui_rect_t *right) {
@@ -830,6 +845,12 @@ static void draw_wallpaper_rect(uint64_t x0, uint64_t y0, uint64_t w, uint64_t h
     if(x0>=fw || y0>=fh)return;
     uint64_t x1=w>fw-x0?fw:x0+w,y1=h>fh-y0?fh:y0+h;
     if(!scene_clip_bounds(&x0,&y0,&x1,&y1))return;
+    /* The gradient stops belong to the theme: a theme change drops both the
+       colour table and the cached full-screen render. */
+    static uint32_t wlut_generation = 0u;
+    if(wlut_generation!=ui_theme_generation() && wallpaper_cache) {
+        kfree(wallpaper_cache);wallpaper_cache=NULL;
+    }
     if(wallpaper_cache && (wallpaper_cache_width!=fw || wallpaper_cache_height!=fh)) {
         kfree(wallpaper_cache);wallpaper_cache=NULL;
     }
@@ -842,35 +863,33 @@ static void draw_wallpaper_rect(uint64_t x0, uint64_t y0, uint64_t w, uint64_t h
     if(!wallpaper_cache && x0==0 && y0==0 && x1==fw && y1==fh && fw<=SIZE_MAX/fh/sizeof(uint32_t))
         new_cache=kmalloc(fw*fh*sizeof(uint32_t));
 
-    /* 512-entry LUT for the diagonal gradient.
-       Colors sampled from the rendered Figma frame (gradient stops are 58%
-       alpha over a dark base, so these are the final composited values):
-       top-right   (137, 53, 151)
-       center      ( 93, 66, 155)   stop at 0.497
-       bottom-left ( 47, 88, 156)
+    /* 512-entry LUT for the diagonal gradient. The stops come from the theme
+       (dark: the composited Figma frame values; light: a pastel of them):
+       top-right   wallpaper_a
+       center      wallpaper_b   stop at 0.497
+       bottom-left wallpaper_c
        t = ((fw-x)*fw + y*fh) / (fw²+fh²) */
     static uint32_t wlut[512];
-    static uint8_t  wlut_ok = 0u;
 
-    if (!wlut_ok) {
+    if (wlut_generation != ui_theme_generation()) {
+        const ui_theme_t *theme = ui_theme();
+        const int32_t a[3] = { (int32_t)(theme->wallpaper_a >> 16) & 255, (int32_t)(theme->wallpaper_a >> 8) & 255,
+                               (int32_t)theme->wallpaper_a & 255 };
+        const int32_t m[3] = { (int32_t)(theme->wallpaper_b >> 16) & 255, (int32_t)(theme->wallpaper_b >> 8) & 255,
+                               (int32_t)theme->wallpaper_b & 255 };
+        const int32_t c[3] = { (int32_t)(theme->wallpaper_c >> 16) & 255, (int32_t)(theme->wallpaper_c >> 8) & 255,
+                               (int32_t)theme->wallpaper_c & 255 };
         for (uint32_t i = 0u; i < 512u; ++i) {
-            const uint64_t t   = (uint64_t)i * 65535u / 511u;
-            const uint64_t mid = 32570u;  /* 0.497 × 65535 */
-            uint8_t r, g, b;
-            if (t <= mid) {
-                const uint64_t s = t * 65535u / mid;
-                r = (uint8_t)(137u - (uint32_t)(44u * s / 65535u));
-                g = (uint8_t)( 53u + (uint32_t)(13u * s / 65535u));
-                b = (uint8_t)(151u + (uint32_t)( 4u * s / 65535u));
-            } else {
-                const uint64_t s = (t - mid) * 65535u / (65535u - mid);
-                r = (uint8_t)( 93u - (uint32_t)(46u * s / 65535u));
-                g = (uint8_t)( 66u + (uint32_t)(22u * s / 65535u));
-                b = (uint8_t)(155u + (uint32_t)( 1u * s / 65535u));
-            }
-            wlut[i] = pack_color(r, g, b);
+            const int64_t t   = (int64_t)i * 65535 / 511;
+            const int64_t mid = 32570;  /* 0.497 × 65535 */
+            const int32_t *from = t <= mid ? a : m;
+            const int32_t *to = t <= mid ? m : c;
+            const int64_t s = t <= mid ? t * 65535 / mid : (t - mid) * 65535 / (65535 - mid);
+            wlut[i] = pack_color((uint8_t)(from[0] + (to[0] - from[0]) * s / 65535),
+                                 (uint8_t)(from[1] + (to[1] - from[1]) * s / 65535),
+                                 (uint8_t)(from[2] + (to[2] - from[2]) * s / 65535));
         }
-        wlut_ok = 1u;
+        wlut_generation = ui_theme_generation();
     }
 
     const uint64_t denom = fw * fw + fh * fh;
@@ -966,10 +985,11 @@ static void draw_desktop_icon_cell(uint64_t i) {
     /* Figma Frame 15 grid: origin 52,106 — pitch 109×115, 3 columns,
        gold folders / gray files, label centred under the icon.
        Hover keeps the geometry stable and only adds a quiet plate. */
-    const uint32_t gold  = pack_color(201u, 153u, 20u);
-    const uint32_t paper = pack_color(217u, 217u, 217u);
+    const ui_theme_t *theme = ui_theme();
+    const uint32_t gold  = theme_px(theme->folder);
+    const uint32_t paper = theme_px(theme->paper);
     const uint32_t line  = pack_color(120u, 120u, 120u);
-    const uint32_t label = pack_color(255u, 255u, 255u);
+    const uint32_t label = theme_px(theme->desktop_text);
     const uint64_t col = i % 3u;
     const uint64_t row = i / 3u;
     const uint64_t cx = 52u + col * 109u;
@@ -982,9 +1002,10 @@ static void draw_desktop_icon_cell(uint64_t i) {
     }
 
     if (hovered) {
-        fill_rounded_rect(cx > 8u ? cx - 8u : 0u,
-                          cy > 6u ? cy - 6u : 0u,
-                          97u, 94u, 8u, pack_color(74u, 55u, 104u));
+        /* The same glass as the top bar, so hover reads in both themes. */
+        blend_rounded_rect(cx > 8u ? cx - 8u : 0u,
+                           cy > 6u ? cy - 6u : 0u,
+                           97u, 94u, 8u, theme_px(theme->bar), theme->bar_alpha);
     }
 
     if (desktop_icons[i].is_dir) {
@@ -1029,8 +1050,8 @@ static void draw_wallpaper(void) {
     if (drag_repaint_active != 0u) {
         const uint64_t fw = gui_framebuffer->width;
         const uint64_t fh = gui_framebuffer->height;
-        const uint64_t logo_x = fw > VEX_CENTER_LOGO_W ? (fw - VEX_CENTER_LOGO_W) / 2u : 0u;
-        const uint64_t logo_y = fh > VEX_CENTER_LOGO_H ? (fh - VEX_CENTER_LOGO_H) / 2u : 0u;
+        const uint64_t logo_x = fw > UI_MASK_WORDMARK_OS_W ? (fw - UI_MASK_WORDMARK_OS_W) / 2u : 0u;
+        const uint64_t logo_y = fh > UI_MASK_WORDMARK_OS_H ? (fh - UI_MASK_WORDMARK_OS_H) / 2u : 0u;
         uint8_t repaint_logo = 0u;
 
         for (uint8_t i = 0u; i < drag_repaint_count; ++i) {
@@ -1038,12 +1059,12 @@ static void draw_wallpaper(void) {
             const uint64_t damage_right = damage->x + damage->w;
             const uint64_t damage_bottom = damage->y + damage->h;
             draw_wallpaper_rect(damage->x, damage->y, damage->w, damage->h);
-            if (logo_x < damage_right && logo_x + VEX_CENTER_LOGO_W > damage->x &&
-                logo_y < damage_bottom && logo_y + VEX_CENTER_LOGO_H > damage->y) {
+            if (logo_x < damage_right && logo_x + UI_MASK_WORDMARK_OS_W > damage->x &&
+                logo_y < damage_bottom && logo_y + UI_MASK_WORDMARK_OS_H > damage->y) {
                 repaint_logo = 1u;
             }
         }
-        if (repaint_logo != 0u && fw > VEX_CENTER_LOGO_W && fh > VEX_CENTER_LOGO_H) {
+        if (repaint_logo != 0u && fw > UI_MASK_WORDMARK_OS_W && fh > UI_MASK_WORDMARK_OS_H) {
             draw_kyil_wordmark(logo_x,logo_y);
         }
         /* The icon inventory is already cached from the full scene render.
@@ -1054,10 +1075,10 @@ static void draw_wallpaper(void) {
 
     draw_wallpaper_rect(0, 0, gui_framebuffer->width, gui_framebuffer->height);
     /* Figma desktop emblem: VEX-OS wordmark centred on the wallpaper. */
-    if (gui_framebuffer->width > VEX_CENTER_LOGO_W &&
-        gui_framebuffer->height > VEX_CENTER_LOGO_H) {
-        draw_kyil_wordmark((gui_framebuffer->width-VEX_CENTER_LOGO_W)/2u,
-                          (gui_framebuffer->height-VEX_CENTER_LOGO_H)/2u);
+    if (gui_framebuffer->width > UI_MASK_WORDMARK_OS_W &&
+        gui_framebuffer->height > UI_MASK_WORDMARK_OS_H) {
+        draw_kyil_wordmark((gui_framebuffer->width-UI_MASK_WORDMARK_OS_W)/2u,
+                          (gui_framebuffer->height-UI_MASK_WORDMARK_OS_H)/2u);
     }
     /* Figma Frame 15: desktop shows the contents of ~/Desktop */
     draw_desktop_icons();
@@ -1089,6 +1110,26 @@ static void blit_rgba_icon(uint64_t x, uint64_t y,
 /* Public wrapper so other UI modules can blit Figma RGBA assets. */
 void gui_blit_rgba(uint64_t x, uint64_t y, const uint8_t *data, uint64_t iw, uint64_t ih) {
     blit_rgba_icon(x, y, data, iw, ih);
+}
+
+/* Paint a coverage mask in one colour. `step` is the byte distance between
+   two pixels: 1 for an 8-bit mask, 4 to reuse the alpha of an RGBA icon
+   (pass a pointer to its first alpha byte). Monochrome icons take the theme
+   colour this way instead of the grey they were exported in. */
+static void blit_alpha_mask(uint64_t x, uint64_t y, const uint8_t *mask, uint64_t step,
+                            uint64_t iw, uint64_t ih, uint32_t color) {
+    if (gui_framebuffer == NULL || mask == NULL || iw == 0u || ih == 0u) {
+        return;
+    }
+    for (uint64_t dy = 0u; dy < ih && y + dy < gui_framebuffer->height; ++dy) {
+        for (uint64_t dx = 0u; dx < iw && x + dx < gui_framebuffer->width; ++dx) {
+            const uint8_t a = mask[(dy * iw + dx) * step];
+            if (a == 0u) { continue; }
+            scene_write(x + dx, y + dy,
+                a == 255u ? color : blend_color(scene_pixel(x + dx, y + dy), color, a, 255u));
+        }
+    }
+    compositor_mark_dirty(x, y, iw, ih);
 }
 
 /* ── Inter proportional font engine (8-bit alpha glyphs) ── */
@@ -1164,32 +1205,20 @@ void gui_font_text_clipped(uint64_t x, uint64_t y, const char *text,
 void gui_font_text(uint64_t x, uint64_t y, const char *text, uint32_t color, uint8_t size) {
     gui_font_text_clipped(x, y, text, color, size, 0u);
 }
+/* "KyIl⬡S": Inter with the hexagon standing in for the O, rendered offline
+   at full size (scripts/generate_kyil_ui_assets.py) and coloured here. */
 static void draw_kyil_wordmark(uint64_t x,uint64_t y) {
-    const vex_font_face_t *f=&vex_font_faces[2];const char *text="KyIlOS";
-    uint64_t width=gui_font_text_width(text,20)*3;
-    uint64_t pen=x+(VEX_CENTER_LOGO_W>width?(VEX_CENTER_LOGO_W-width)/2:0);
-    y+=(VEX_CENTER_LOGO_H>f->cell_h*3?(VEX_CENTER_LOGO_H-f->cell_h*3)/2:0);
-    uint64_t start=pen;
-    for(unsigned i=0;text[i];i++) {
-        unsigned c=(unsigned char)text[i]-32,gw=f->widths[c];const uint8_t *bitmap=f->data+f->offsets[c];
-        for(unsigned gy=0;gy<f->cell_h*3;gy++)for(unsigned gx=0;gx<gw*3;gx++) {
-            uint8_t alpha=bitmap[(gy/3)*gw+gx/3];if(!alpha)continue;
-            uint64_t px=pen+gx,py=y+gy;if(px>=gui_framebuffer->width || py>=gui_framebuffer->height)continue;
-            uint32_t color=mix_color(pack_color(156,123,255),pack_color(90,163,250),px-start,width);
-            scene_write(px,py,blend_color(scene_pixel(px,py),color,alpha,255));
-        }
-        pen+=gw*3;
-    }
-    compositor_mark_dirty(start,y,width,f->cell_h*3);
+    blit_alpha_mask(x, y, ui_mask_wordmark_os, 1u, UI_MASK_WORDMARK_OS_W, UI_MASK_WORDMARK_OS_H,
+                    theme_px(ui_theme()->desktop_text));
 }
 
 static void draw_taskbar_brand(void) {
     if (gui_framebuffer == NULL) {
         return;
     }
-    /* Hexagon brand, vertically centred in the slim bar (25×28) */
-    blit_rgba_icon(32u, GUI_BAR_CY - VEX_ICON_HEX_H / 2u,
-                   vex_icon_hex, VEX_ICON_HEX_W, VEX_ICON_HEX_H);
+    /* Hexagon outline, vertically centred in the slim bar (25×28) */
+    blit_alpha_mask(32u, GUI_BAR_CY - UI_MASK_HEX_BAR_H / 2u, ui_mask_hex_bar, 1u,
+                    UI_MASK_HEX_BAR_W, UI_MASK_HEX_BAR_H, theme_px(ui_theme()->bar_icon));
 }
 
 static void draw_border(uint64_t x, uint64_t y, uint64_t w, uint64_t h, uint32_t color) {
@@ -1473,13 +1502,25 @@ static void format_date(char out[18]) {
     append_text(out, 18u, &offset, months[(month == 0u ? 1u : month) - 1u]);
 }
 
+/* "21:42" in local time (the CMOS clock runs on UTC). */
+static void format_clock(char out[6]) {
+    const int hours = ((int)rtc_hours() + timezone_offset_hours() + 24) % 24;
+    const uint8_t minutes = rtc_minutes();
+    out[0] = (char)('0' + hours / 10);
+    out[1] = (char)('0' + hours % 10);
+    out[2] = ':';
+    out[3] = (char)('0' + minutes / 10u);
+    out[4] = (char)('0' + minutes % 10u);
+    out[5] = '\0';
+}
+
 static void draw_taskbar_time(void) {
     if (gui_framebuffer == NULL || gui_framebuffer->width <= 160u) {
         return;
     }
 
     char date_text[18];
-    const uint32_t text_col = pack_color(255, 255, 255);
+    const uint32_t text_col = theme_px(ui_theme()->bar_text);
     const uint64_t width    = gui_framebuffer->width;
     /* Inter 16, vertically centred in the glass bar */
     const uint64_t text_y   = GUI_BAR_CY - gui_font_cell_height(16u) / 2u;
@@ -1527,42 +1568,50 @@ static void draw_taskbar_system_icons(void) {
     }
 
     const uint64_t W  = gui_framebuffer->width;
-    const uint32_t ic = pack_color(156u, 156u, 156u);  /* #9C9C9C */
+    const uint32_t ic = theme_px(ui_theme()->bar_icon);
 
     /* Figma positions (1920px design), all icons at y=27:
        WiFi   x=1809  → offset from right: 1920-1809 = 111
        Volume x=1769  → offset from right: 1920-1769 = 151
        Battery outline x=1848 y=31 w=36 h=14 → right offset: 72
-       Battery nub at x=1861+22=1883 → right offset: 37 */
+       Battery nub at x=1861+22=1883 → right offset: 37
+       The exported icons are grey RGBA; only their alpha is used, so they
+       take the theme's icon colour. */
 
     /* WiFi — real Figma icon 22×22, centred in the slim bar */
     if (W > 111u + VEX_ICON_WIFI_W) {
-        blit_rgba_icon(W - 111u, GUI_BAR_CY - VEX_ICON_WIFI_H / 2u,
-                       vex_icon_wifi, VEX_ICON_WIFI_W, VEX_ICON_WIFI_H);
+        blit_alpha_mask(W - 111u, GUI_BAR_CY - VEX_ICON_WIFI_H / 2u, vex_icon_wifi + 3u, 4u,
+                        VEX_ICON_WIFI_W, VEX_ICON_WIFI_H, ic);
     }
 
     /* Volume — real Figma icon 22×22 */
     if (W > 151u + VEX_ICON_VOLUME_W) {
-        blit_rgba_icon(W - 151u, GUI_BAR_CY - VEX_ICON_VOLUME_H / 2u,
-                       vex_icon_volume, VEX_ICON_VOLUME_W, VEX_ICON_VOLUME_H);
+        blit_alpha_mask(W - 151u, GUI_BAR_CY - VEX_ICON_VOLUME_H / 2u, vex_icon_volume + 3u, 4u,
+                        VEX_ICON_VOLUME_W, VEX_ICON_VOLUME_H, ic);
     }
 
-    /* Notification counter pill — outline 36×14 r=7, dot left, count right */
+    /* Notification counter pill — 1px outline 36×14 r=7 over the glass,
+       dot left, count right */
     if (W > 80u) {
         const uint64_t bx = W - 72u;
         const uint64_t by = GUI_BAR_CY - 7u;
-        fill_rounded_rect(bx,      by,      36u, 14u, 7u, ic);
-        fill_rounded_rect(bx + 2u, by + 2u, 32u, 10u, 5u, pack_color(20u, 20u, 20u));
-        fill_circle(bx + 9u, by + 7u, 4u, ic);                /* dot */
-        /* tiny "0": 7×9 ring that fits inside the 14px pill */
-        fill_rounded_rect(bx + 21u, by + 3u, 7u, 9u, 3u, ic);
-        fill_rounded_rect(bx + 23u, by + 5u, 3u, 5u, 1u, pack_color(20u, 20u, 20u));
+        for (uint64_t py = by; py < by + 14u; ++py) {
+            for (uint64_t px = bx; px < bx + 36u; ++px) {
+                if (rounded_rect_contains(px, py, bx, by, 36u, 14u, 7u) &&
+                    !rounded_rect_contains(px, py, bx + 1u, by + 1u, 34u, 12u, 6u)) {
+                    scene_write(px, py, ic);
+                }
+            }
+        }
+        compositor_mark_dirty(bx, by, 36u, 14u);
+        fill_circle(bx + 9u, by + 7u, 3u, ic);                /* dot */
+        gui_font_text(bx + 22u, by + (14u - gui_font_cell_height(13u)) / 2u, "0", ic, 13u);
     }
 
     /* Battery — real Figma icon (48×20) */
     if (W > 217u + VEX_ICON_POWER_W) {
-        blit_rgba_icon(W - 217u, GUI_BAR_CY - VEX_ICON_POWER_H / 2u,
-                       vex_icon_power, VEX_ICON_POWER_W, VEX_ICON_POWER_H);
+        blit_alpha_mask(W - 217u, GUI_BAR_CY - VEX_ICON_POWER_H / 2u, vex_icon_power + 3u, 4u,
+                        VEX_ICON_POWER_W, VEX_ICON_POWER_H, ic);
     }
 }
 
@@ -1578,26 +1627,30 @@ void draw_taskbar_static(void) {
 
     if (vex_lvgl_ui_ready()) {
         char date_text[18];
+        char clock_text[6];
         format_date(date_text);
+        format_clock(clock_text);
+        vex_lvgl_ui_set_taskbar_info(app_surface_focused_name(), clock_text);
         vex_lvgl_ui_draw_taskbar(date_text, taskbar_hover);
         draw_app_switcher_overlay();
         return;
     }
 
     /* 2. Frosted-glass bar — slim variant: x=20 y=13 w=(W-40) h=36 rx=6
-          fill=#141414 fill-opacity=0.48  →  alpha ≈ 122/255 */
+          dark: fill=#141414 fill-opacity=0.48; light: white glass */
+    const ui_theme_t *theme = ui_theme();
     if (W > 40u) {
         blend_rounded_rect(20u, GUI_BAR_Y, W - 40u, GUI_BAR_H, 6u,
-                           pack_color(20u, 20u, 20u), 122u);
+                           theme_px(theme->bar), theme->bar_alpha);
     }
 
-    /* 2b. Hover highlight: light translucent chip behind the hovered icon */
+    /* 2b. Hover highlight: translucent chip behind the hovered icon */
     if (taskbar_hover >= 0) {
         uint64_t zx, zw;
         if (taskbar_hover_zone(taskbar_hover, &zx, &zw)) {
             blend_rounded_rect(zx > 5u ? zx - 5u : 0u, GUI_BAR_Y + 4u,
                                zw + 10u, GUI_BAR_H - 8u, 6u,
-                               pack_color(255u, 255u, 255u), 34u);
+                               theme_px(theme->bar_hover), theme->bar_hover_alpha);
         }
     }
 
@@ -1613,11 +1666,14 @@ static void draw_main_window_frame(const char *title_text) {
 }
 
 static void draw_window_frame_at(uint64_t x, uint64_t y, uint64_t w, uint64_t h, const char *title_text) {
-    /* Figma window chrome (Frames 20/21/22):
-       solid #141414 card, divider under the 45px title bar,
-       traffic lights on the RIGHT (red outermost). */
-    const uint32_t body = pack_color(20, 20, 20);    /* #141414 */
-    const uint32_t sep  = pack_color(72, 49, 86);    /* divider — dark violet */
+    /* Figma window chrome (Frames 16/20/21/22): a solid card in the theme's
+       window colour, a hairline divider under the 45px title bar and the
+       traffic lights on the RIGHT (red outermost). The frames carry no title
+       text: the application owns its content, the title names the window in
+       the switcher. */
+    const ui_theme_t *theme = ui_theme();
+    const uint32_t body = theme_px(theme->window);
+    const uint32_t sep  = theme_px(theme->divider);
 
     if (gui_framebuffer == NULL || w == 0 || h == 0) {
         return;
@@ -1638,16 +1694,11 @@ static void draw_window_frame_at(uint64_t x, uint64_t y, uint64_t w, uint64_t h,
     /* Traffic lights — right side, red outermost (Figma order) */
     if (w > 90u) {
         const uint64_t cy = y + GUI_TITLE_HEIGHT / 2u;
-        fill_circle(x + w - 22u, cy, GUI_WINDOW_CONTROL_RADIUS, pack_color(255,   0,   0));
-        fill_circle(x + w - 48u, cy, GUI_WINDOW_CONTROL_RADIUS, pack_color(232, 224,   2));
-        fill_circle(x + w - 74u, cy, GUI_WINDOW_CONTROL_RADIUS, pack_color( 68, 255,   0));
+        fill_circle(x + w - 22u, cy, GUI_WINDOW_CONTROL_RADIUS, theme_px(theme->control_close));
+        fill_circle(x + w - 48u, cy, GUI_WINDOW_CONTROL_RADIUS, theme_px(theme->control_minimize));
+        fill_circle(x + w - 74u, cy, GUI_WINDOW_CONTROL_RADIUS, theme_px(theme->control_maximize));
     }
-
-    /* Title — left-aligned, white, leaves the right free for controls */
-    if (title_text != NULL) {
-        gui_font_text_clipped(x + 23u, y + (GUI_TITLE_HEIGHT - gui_font_cell_height(16u)) / 2u,
-            title_text, pack_color(255, 255, 255), 16u, w > 130u ? w - 130u : 8u);
-    }
+    (void)title_text;
 
     compositor_mark_dirty(x > 4u ? x - 4u : 0u, y > 4u ? y - 4u : 0u, w + 8u, h + 8u);
 }
@@ -3240,6 +3291,16 @@ static void redraw_desktop_cell(int i) {
 }
 
 static void gui_update_hovers(void) {
+    /* Context menu entry under the pointer → accent pill */
+    if (context_menu_visible) {
+        const int item = context_menu_item_at(cursor_x, cursor_y);
+        if (item != context_menu_hover) {
+            context_menu_hover = item;
+            draw_context_menu();
+            gui_flush_scene_and_cursor();
+        }
+    }
+
     /* Taskbar chips → translucent highlight */
     const int th = taskbar_hover_at(cursor_x, cursor_y);
     if (th != taskbar_hover) {
@@ -3614,8 +3675,10 @@ void gui_tick(void) {
             } else scheduler_detach_process(pid);
         } else if (menu_item == 4) {
             gui_open_editor();
-        } else if(menu_item==5 || menu_item==6) {
-            if(power_request(menu_item==5?POWER_OFF:POWER_REBOOT))tty_puts("power: transition unavailable\n");
+        } else if (menu_item == 5) {
+            gui_set_theme(ui_theme_mode() == UI_THEME_DARK ? UI_THEME_LIGHT : UI_THEME_DARK);
+        } else if(menu_item==6 || menu_item==7) {
+            if(power_request(menu_item==6?POWER_OFF:POWER_REBOOT))tty_puts("power: transition unavailable\n");
         } else if (app_control_hit == APP_SURFACE_CONTROL_CLOSE) {
             wm_consumed_left=1;
             app_surface_focus(app_hit->window_id);
@@ -4468,6 +4531,23 @@ void gui_open_file_manager_path(const char *path) {
 
 void gui_open_file_manager(void) {
     gui_open_file_manager_path(NULL);
+}
+
+/* Switch the whole system between the dark and the light palette: the shell
+   repaints at once, and every application window is woken with a theme
+   notification so it re-reads /etc/kyil/theme.conf on its next frame. */
+int gui_set_theme(int mode) {
+    GUI_GUARD;
+    if (!ui_theme_set_mode((ui_theme_mode_t)mode)) {
+        return 0;
+    }
+    if (gui_framebuffer != NULL) {
+        render_active_app();
+        draw_taskbar_static();
+        gui_flush_scene_and_cursor();
+    }
+    app_surface_notify_all(VEX_APP_NOTIFY_THEME);
+    return 1;
 }
 
 void gui_open_editor_path(const char *path) {

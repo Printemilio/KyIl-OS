@@ -31,6 +31,7 @@ const char *pe_parse(const uint8_t *f, size_t n, pe_image *im) {
     im->preferred=pe_u64(h+24); im->count=count; im->subsystem=pe_u16(h+68);
     im->stack_reserve=pe_u64(h+72);im->stack_commit=pe_u64(h+80);
     im->dll=(pe_u16(c+18)&0x2000)!=0;
+    im->relocations_stripped=(pe_u16(c+18)&1)!=0;
     uint32_t sa=pe_u32(h+32), fa=pe_u32(h+36), nd=pe_u32(h+108);
     if(sa<PE_PAGE || (sa&(sa-1)) || fa<512 || fa>65536 || (fa&(fa-1)) || sa<fa ||
        !im->size || im->size%sa || !im->headers || im->headers%fa ||
@@ -75,7 +76,10 @@ const char *pe_parse(const uint8_t *f, size_t n, pe_image *im) {
 }
 const char *pe_relocate(uint8_t *b, const pe_image *im, uint64_t base) {
     uint32_t r=im->dirs[5][0], n=im->dirs[5][1];
-    if(base!=im->preferred && !n) return "rebasing requires relocation directory";
+    /* An empty table can mean genuinely position-independent code, as emitted
+       by the linker for DLLs with only relative references. The COFF stripped
+       flag, not an empty directory alone, requires the preferred address. */
+    if(base!=im->preferred && im->relocations_stripped)return "image requires preferred base (relocations stripped)";
     uint64_t delta=base-im->preferred;
     for(uint64_t at=r; at<(uint64_t)r+n;) {
         if(!pe_span(at,8,(uint64_t)r+n)) return "truncated relocation block";

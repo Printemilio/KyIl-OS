@@ -1,12 +1,26 @@
 {
-  "snapshot": "2026-10-18",
-  "tag": "v2026.10.18",
+  "version": "0.29.2",
+  "snapshot": "2026-10-19",
+  "tag": "v0.29.2",
   "image": "build/kyilos.iso",
-  "bytes": 2114533376,
-  "sha256": "40CA8EE3387DDD3F27F36B786D190C0FA8BCDCB7C9FD02954AD2A524733AC893",
-  "kernel_sha256": "DEAEF6EC86C16580D2BB020D6CF980BDE34F52D94A2CB7EF1743742D90FB75F8",
-  "validated_vcpus": [1, 4],
-  "firmware_reference": "BIOS / PIIX3",
+  "bytes": 1396013056,
+  "sha256": "467E1201309FDBBD4FFED7A1395FC771E526A6CBF28031C758C1C46FDCB80BD8",
+  "kernel_sha256": "D6A798179EE0B79D1DBE6C2A6D86BF712E2311D63EF361901421918CA5FE2890",
+  "validated_vcpus": [
+    4
+  ],
+  "firmware_reference": "UEFI / ICH9",
+  "default_memory_mib": 5120,
+  "default_cpus": 4,
+  "cpu_profile": "host",
+  "framebuffer": "1920x1080",
   "chrome_gui": false,
-  "persistent_data_disk_included": false
+  "persistent_data_disk_included": false,
+  "source_copy": "Vex-OS - Last - Copie - Copie",
+  "rebuilt_for_publication": false,
+  "publication_validation": [
+    "UEFI desktop boot",
+    "Terminal native shell and top: 4 CPUs",
+    "Native shutdown; VirtualBox poweroff verified"
+  ]
 }

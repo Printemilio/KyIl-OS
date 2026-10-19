@@ -91,6 +91,14 @@ int fs_replace_preserve(const char *source,const char *destination,const char *b
 int fs_mode_mask(const char *path,uint32_t mask,uint32_t value);
 int fs_exists(const char *path);
 int fs_is_protected(const char *path);
+/* Native namespace protection, not a content lock or a Windows share lease.
+ * A readable regular-file reference may pin its canonical name (and ancestors
+ * against rename/removal). FS_ADMIN/security can still intervene. */
+typedef struct fs_name_protection fs_name_protection_t;
+fs_name_protection_t *fs_name_protect(const char *path,int *error);
+void fs_name_protection_release(fs_name_protection_t *protection);
+static inline void fs_name_protection_cleanup(fs_name_protection_t **p) {fs_name_protection_release(*p);}
+int fs_namespace_mutation_allowed(const char *path);
 int fs_get_metadata(const char *path, fs_metadata_t *out, uint8_t follow_links);
 int fs_set_mode(const char *path, uint32_t mode);
 int fs_symlink(const char *target, const char *link_path);

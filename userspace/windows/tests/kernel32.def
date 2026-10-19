@@ -76,6 +76,7 @@ VirtualProtectEx
 ReadProcessMemory
 WriteProcessMemory
 RtlCaptureContext
+RtlRestoreContext
 RtlCaptureStackBackTrace
 RtlLookupFunctionEntry
 RtlVirtualUnwind

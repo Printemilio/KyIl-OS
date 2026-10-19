@@ -1,6 +1,15 @@
-# Windows/PE userspace runtime — current checkpoint (2026-10-11)
+# KSW — KyIl Subsystem for Windows
 
-Latest startup execution checkpoint: [2026-10-18 report](windows-startup-progress-2026-10-18.md)
+Latest import-family and registry write-guard integration: [implementation and validation](windows-import-batch-2026-10-18.md).
+
+Latest guarded-longjmp integration: [implementation, Windows reference and VM validation](windows-guard-longjump-2026-10-18.md).
+
+Latest native file-protection integration: [implementation and validation](windows-native-file-protection-2026-10-18.md).
+KSL denotes the Linux subsystem exclusively. Historical VSL references to
+Windows in older checkpoint reports should be read as KSW.
+
+Latest startup execution checkpoint: [message windows / tokens / loader](windows-message-windows-tokens-2026-10-18.md)
+(previous [shared-events checkpoint](windows-startup-progress-2026-10-18.md))
 and [machine-readable frontier](windows-chrome-main-frontier.json). The dated
 description below remains the earlier implementation baseline.
 

@@ -108,6 +108,7 @@ let latin_codepoints =
   @ range 0x2030 0x2044 (* per-mille, primes, fraction slash *)
   @ range 0x20A0 0x20BF (* every currency sign, including U+20AC *)
   @ range 0x2190 0x2193 (* the four arrows *)
+  @ range 0x2500 0x257F (* box drawing: rules and frames in terminal output *)
 
 (* Loaded well above any size we draw at: reducing a large glyph with a
    bilinear filter stays clean, enlarging a small one does not. *)
@@ -698,10 +699,18 @@ let apply_title_bar styles =
   | None -> ()
 
 
-let default_text_color = R.Color.create 226 232 240 255
-let muted_color = R.Color.create 148 163 184 255
-let accent_color = R.Color.create 59 130 246 255
-let panel_color = R.Color.create 36 40 59 255
+(* The defaults an unstyled widget falls back on are the system palette's
+   (Os_theme), so a program that names no colour at all still looks like
+   KyIlOS and follows the dark or light theme. *)
+let theme_color token fallback =
+  match Option.bind (Os_theme.lookup token) parse_hex_color with
+  | Some colour -> rgba colour
+  | None -> fallback
+
+let default_text_color () = theme_color "text" (R.Color.create 226 232 240 255)
+let muted_color () = theme_color "muted" (R.Color.create 148 163 184 255)
+let accent_color () = theme_color "accent" (R.Color.create 59 130 246 255)
+let panel_color () = theme_color "panel" (R.Color.create 36 40 59 255)
 
 let color_or fallback names styles =
   match Option.bind (find_first_literal names styles) color_from_literal with
@@ -762,10 +771,10 @@ let active_fill styles base =
   | None -> shift_color press_shift base
 
 let focus_color_of styles =
-  Option.value (color_style [ "focus-color" ] styles) ~default:accent_color
+  Option.value (color_style [ "focus-color" ] styles) ~default:(accent_color ())
 
 let border_color_of styles =
-  Option.value (color_style [ "border-color" ] styles) ~default:muted_color
+  Option.value (color_style [ "border-color" ] styles) ~default:(muted_color ())
 
 (* 'width: fill' asks for whatever the parent has left, instead of a fixed
    number of pixels. It is what lets a window be resized without the content
@@ -821,7 +830,7 @@ let face fonts styles =
   | Some value when String.equal (lowercase value) "bold" -> fonts.bold
   | _ -> fonts.regular
 
-let text_color_of styles = color_or default_text_color [ "color"; "text-color" ] styles
+let text_color_of styles = color_or (default_text_color ()) [ "color"; "text-color" ] styles
 
 (* --- layout ---------------------------------------------------------------
 
@@ -1639,7 +1648,7 @@ let rec render fonts ~focused node =
         | None -> ())
     | RlBox ->
         fill_rect (rect_of node)
-          (color_or panel_color [ "background"; "background-color"; "color" ] node.styles)
+          (color_or (panel_color ()) [ "background"; "background-color"; "color" ] node.styles)
           ~roundness:(roundness_of node.styles ~width:node.width ~height:node.height)
     (* The program paints this one. Its background is filled first, then its
        onDraw handler runs -- here, inside the frame, which is what lets the
@@ -1754,7 +1763,7 @@ let rec render fonts ~focused node =
         | None ->
             (* The file was missing or unreadable: show an outline rather than
                nothing, so the gap is visible during development. *)
-            R.draw_rectangle_lines_ex (rect_of node) 1. muted_color)
+            R.draw_rectangle_lines_ex (rect_of node) 1. (muted_color ()))
     | RlText ->
         let step = line_height fonts node.styles in
         let colour = text_color_of node.styles in
@@ -1774,7 +1783,7 @@ let rec render fonts ~focused node =
         let box =
           R.Rectangle.create node.x (node.y +. ((node.height -. size) /. 2.)) size size
         in
-        let base = Option.value (background_of node.styles) ~default:panel_color in
+        let base = Option.value (background_of node.styles) ~default:(panel_color ()) in
         let fill = if node.checked then focus_color_of node.styles else base in
         fill_rect box
           (dim node.enabled (if node.hovered then hover_fill node.styles fill else fill))
@@ -1805,21 +1814,21 @@ let rec render fonts ~focused node =
         let track =
           R.Rectangle.create node.x (middle -. (track_height /. 2.)) node.width track_height
         in
-        fill_rect track (shift_color (-10) panel_color) ~roundness:1.;
+        fill_rect track (shift_color (-10) (panel_color ())) ~roundness:1.;
         let progress =
           if node.slider_max <= 0. then 0. else node.slider_value /. node.slider_max
         in
         fill_rect
           (R.Rectangle.create node.x (middle -. (track_height /. 2.)) (node.width *. progress)
              track_height)
-          (dim node.enabled (Option.value (background_of node.styles) ~default:accent_color))
+          (dim node.enabled (Option.value (background_of node.styles) ~default:(accent_color ())))
           ~roundness:1.;
         let knob = number_style [ "knob-size" ] node.styles ~default:9. in
         let knob_radius = if node.hovered || node.pressed then knob +. 2. else knob in
         R.draw_circle_v
           (R.Vector2.create (node.x +. (node.width *. progress)) middle)
           knob_radius
-          (dim node.enabled (Option.value (background_of node.styles) ~default:accent_color))
+          (dim node.enabled (Option.value (background_of node.styles) ~default:(accent_color ())))
     | RlLabel ->
         (* text-align only has room to act when the label was given a width
            wider than its text; otherwise the box is the text. *)
@@ -1830,7 +1839,7 @@ let rec render fonts ~focused node =
           (R.Vector2.create (node.x +. Float.max 0. dx) node.y)
           (font_size_of node.styles) glyph_spacing (text_color_of node.styles)
     | RlButton ->
-        let base = Option.value (background_of node.styles) ~default:accent_color in
+        let base = Option.value (background_of node.styles) ~default:(accent_color ()) in
         let color =
           if node.pressed && node.hovered then active_fill node.styles base
           else if node.hovered then hover_fill node.styles base
@@ -1846,7 +1855,7 @@ let rec render fonts ~focused node =
         let rect = rect_of node in
         let roundness = roundness_of node.styles ~width:node.width ~height:node.height in
         let has_focus = match focused with Some target -> target == node | None -> false in
-        let base = Option.value (background_of node.styles) ~default:panel_color in
+        let base = Option.value (background_of node.styles) ~default:(panel_color ()) in
         fill_rect rect
           (dim node.enabled (if node.hovered then hover_fill node.styles base else base))
           ~roundness;
@@ -1854,14 +1863,16 @@ let rec render fonts ~focused node =
            a discreet one when the mouse is merely passing over. *)
         if has_focus then
           R.draw_rectangle_rounded_lines rect roundness 16 (focus_color_of node.styles)
-        else if node.hovered then
+        (* An explicit border-color is a permanent outline (a search field
+           drawn as a box); without one the outline only shows on hover. *)
+        else if node.hovered || Option.is_some (color_style [ "border-color" ] node.styles) then
           R.draw_rectangle_rounded_lines rect roundness 16 (border_color_of node.styles);
         let padding = padding_of node.styles in
         let font = face fonts node.styles in
         let size = font_size_of node.styles in
         let showing_placeholder = String.equal node.text "" && not has_focus in
         let shown = if showing_placeholder then node.placeholder else node.text in
-        let colour = if showing_placeholder then muted_color else text_color_of node.styles in
+        let colour = if showing_placeholder then (muted_color ()) else text_color_of node.styles in
         let text_y = node.y +. ((node.height -. R.Vector2.y (text_extent fonts node.styles "A")) /. 2.) in
         let inner_width = node.width -. (2. *. padding) in
         (* Keep the caret inside the visible part. Done here rather than at
@@ -1905,12 +1916,12 @@ let rec render fonts ~focused node =
             (int_of_float (text_y -. 2.))
             2
             (int_of_float (size +. 4.))
-            default_text_color;
+            (default_text_color ());
         R.end_scissor_mode ()
     | RlSelect ->
         let rect = rect_of node in
         let roundness = roundness_of node.styles ~width:node.width ~height:node.height in
-        let base = Option.value (background_of node.styles) ~default:panel_color in
+        let base = Option.value (background_of node.styles) ~default:(panel_color ()) in
         fill_rect rect
           (dim node.enabled (if node.hovered then hover_fill node.styles base else base))
           ~roundness;
@@ -1928,7 +1939,7 @@ let rec render fonts ~focused node =
         R.draw_text_ex (face fonts node.styles) label
           (R.Vector2.create (node.x +. padding) text_y)
           (font_size_of node.styles) glyph_spacing (text_color_of node.styles);
-        draw_chevron rect muted_color;
+        draw_chevron rect (muted_color ());
         if node.expanded then
           overlays :=
             !overlays
@@ -1957,18 +1968,18 @@ let rec render fonts ~focused node =
         Array.iteri
           (fun index rect ->
             let selected = index = node.active in
-            let base = if selected then panel_color else shift_color (-8) panel_color in
+            let base = if selected then (panel_color ()) else shift_color (-8) (panel_color ()) in
             fill_rect rect
               (if (not selected) && index = node.hovered_tab then hover_fill node.styles base
                else base);
             draw_centred_text fonts node.styles rect node.titles.(index)
-              (if selected || index = node.hovered_tab then default_text_color else muted_color);
+              (if selected || index = node.hovered_tab then (default_text_color ()) else (muted_color ()));
             if selected then
               R.draw_rectangle
                 (int_of_float (R.Rectangle.x rect))
                 (int_of_float (R.Rectangle.y rect +. R.Rectangle.height rect -. 3.))
                 (int_of_float (R.Rectangle.width rect))
-                3 accent_color)
+                3 (accent_color ()))
           node.tab_rects;
         List.iteri
           (fun index page -> if index = node.active then render fonts ~focused page)
@@ -1989,7 +2000,7 @@ let rec render fonts ~focused node =
         (match scroll_thumb_rect node with
         | Some thumb ->
             R.draw_rectangle_rounded thumb 1. 8
-              (if is_set dragging_scroll then default_text_color else muted_color)
+              (if is_set dragging_scroll then (default_text_color ()) else (muted_color ()))
         | None -> ())
     | RlColumn
     | RlRow ->
@@ -2518,7 +2529,7 @@ let run_window ~publish ~should_run root_block =
         R.set_config_flags flags;
         let requested_width = Option.value window.width ~default:800 in
         let requested_height = Option.value window.height ~default:600 in
-        R.set_trace_log_level R.TraceLogLevel.Warning;
+        R.set_trace_log_level R.TraceLogLevel.Error;
         R.init_window requested_width requested_height window.title;
         apply_title_bar styles;
         (* The size in the header is a floor, not just a starting point: the
@@ -2571,7 +2582,9 @@ let run_window ~publish ~should_run root_block =
           }
         in
         active_fonts := Some fonts;
-        let background = Option.value (background_of styles) ~default:(R.Color.create 17 24 39 255) in
+        (* Read every frame: 'background: window' follows a theme change live. *)
+        let background () =
+          Option.value (background_of styles) ~default:(theme_color "window" (R.Color.create 17 24 39 255)) in
         (try
            let keep_running () =
              if not(R.window_should_close () || !close_requested) then true else
@@ -2624,7 +2637,7 @@ let run_window ~publish ~should_run root_block =
              | Some _ -> unfocus ()
              | None -> ());
              R.begin_drawing ();
-             R.clear_background background;
+             R.clear_background (background ());
              overlays := [];
              render fonts ~focused:!focused root;
              List.iter (fun draw -> draw ()) !overlays;
@@ -2741,7 +2754,13 @@ let find_canvas_cache node key =
 let draw_color name value =
   match value with
   | V_string text -> (
-      match parse_hex_color text with
+      (* "#rrggbb", or a token of the system palette such as "muted". *)
+      let parsed =
+        match parse_hex_color text with
+        | Some colour -> Some colour
+        | None -> Option.bind (Os_theme.lookup text) parse_hex_color
+      in
+      match parsed with
       | Some (r, g, b, a) -> R.Color.create r g b a
       | None -> raise (Runtime_error (Printf.sprintf "draw.%s does not understand the colour '%s'" name text)))
   | V_int packed ->
@@ -2965,7 +2984,7 @@ let register_draw_module () =
                    (float_of_int (R.Texture.width texture))
                    (float_of_int (R.Texture.height texture)))
                 target (R.Vector2.create 0. 0.) 0. (R.Color.create 255 255 255 255)
-          | None -> R.draw_rectangle_lines_ex target 1. muted_color);
+          | None -> R.draw_rectangle_lines_ex target 1. (muted_color ()));
           V_null);
       native "circle" 4 (fun arguments ->
           let node = canvas_now "circle" in
@@ -3574,8 +3593,38 @@ let register_gui_builtins interp =
       | _ -> raise (Runtime_error "set_value expects (widget, value)"));
   ()
 
+(* The 'theme' module: the system palette (Os_theme) for a program's own
+   drawing and decisions. theme.color("accent") is a 0xRRGGBB number, as
+   draw.* takes; theme.mode() is "dark" or "light". *)
+let register_theme_module () =
+  let token name =
+    match Option.bind (Os_theme.lookup name) parse_hex_color with
+    | Some (r, g, b, _) -> V_int ((r lsl 16) lor (g lsl 8) lor b)
+    | None -> raise (Runtime_error (Printf.sprintf "theme has no colour named '%s'" name))
+  in
+  Runtime.register_native_module "theme"
+    [
+      ( "color",
+        V_native
+          (function
+          | [ V_string name ] -> token name
+          | _ -> raise (Runtime_error "theme.color expects a token name such as \"accent\"")) );
+      ( "hex",
+        V_native
+          (function
+          | [ V_string name ] -> (
+              match Os_theme.lookup name with
+              | Some value -> V_string value
+              | None -> raise (Runtime_error (Printf.sprintf "theme has no token named '%s'" name)))
+          | _ -> raise (Runtime_error "theme.hex expects a token name")) );
+      ("mode", V_native (fun _ -> V_string (Os_theme.mode ())));
+      ("is_dark", V_native (fun _ -> V_bool (Os_theme.mode () <> "light")));
+      ("generation", V_native (fun _ -> V_int (Os_theme.current_generation ())));
+    ]
+
 let register () =
   gui_hook := execute_gui;
+  register_theme_module ();
   register_draw_module ();
   register_scene_module ();
   register_keys_module ();

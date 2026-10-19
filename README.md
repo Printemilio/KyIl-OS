@@ -6,7 +6,7 @@ KyIlOS développe ses propres modèles de mémoire, d’ordonnancement, de resso
 et d’interface graphique. Le bureau accueille des applications natives en Suchu,
 un navigateur WebKit et des couches de compatibilité ELF/Linux et Windows/PE.
 
-Ce dépôt présente le **snapshot du 18 octobre 2026**. Il contient les sources utiles,
+Ce dépôt publie **KyIlOS v0.29.2**, depuis la copie fournie le 19 octobre 2026. Il contient les sources utiles,
 les outils et la documentation ; l’image prête à démarrer est distribuée séparément
 dans les [Releases](https://github.com/Printemilio/KyIl-OS/releases).
 
@@ -20,7 +20,7 @@ dans les [Releases](https://github.com/Printemilio/KyIl-OS/releases).
 
 Sous Windows, installer **Git**, **PowerShell 7** et **VirtualBox**. Une machine hôte
 avec virtualisation matérielle activée et suffisamment de mémoire libre est nécessaire.
-Le profil fourni réserve **4 Gio de RAM et 4 vCPU** ; il peut être ajusté.
+Le profil fourni réserve **5 Gio de RAM et 4 vCPU** ; il peut être ajusté.
 
 ```powershell
 git clone https://github.com/Printemilio/KyIl-OS.git
@@ -39,14 +39,19 @@ Un autre profil est possible :
 .\scripts\start-vm.ps1 -CpuCount 1 -MemoryMB 4096 -VmName KyIlOS-Test
 ```
 
-Le lanceur crée sa propre VM en **BIOS Legacy / PIIX3**, avec une carte **Intel
-82540EM en NAT**. Il refuse de réutiliser une VM étrangère, de couper une VM en
-cours d’exécution ou de supprimer son état sauvegardé. Il ne formate et n’attache
-aucun disque de l’hôte. `-Firmware efi` est disponible, mais le profil de référence
-de cette publication est BIOS.
+Le lanceur crée une VM **UEFI / ICH9**, avec **4 vCPU**, **5 Gio de RAM**, un
+profil CPU hôte, **VMSVGA / 128 Mio**, un lecteur ISO SATA/AHCI et une carte
+**Intel 82540EM en NAT**. Le framebuffer invité est de **1920×1080** ; la fenêtre
+VirtualBox est visible et redimensionnée pour l’écran principal de l’hôte.
+Le profil de cette release utilise les capacités modernes de la VM ; les chemins
+de compatibilité BIOS/anciens CPU restent présents dans les sources.
 
-Sans Git, télécharger `KyIlOS-2026.10.18-vm.zip` depuis la
-[release du snapshot](https://github.com/Printemilio/KyIl-OS/releases/tag/v2026.10.18),
+Le lanceur refuse de réutiliser une VM étrangère, de couper une VM en cours
+d’exécution ou de supprimer son état sauvegardé. Il ne formate et n’attache aucun
+disque physique de l’hôte. `-Headless` est une option explicite, jamais le défaut.
+
+Sans Git, télécharger `KyIlOS-v0.29.2-vm.zip` depuis la
+[release du snapshot](https://github.com/Printemilio/KyIl-OS/releases/tag/v0.29.2),
 l’extraire dans un dossier, puis lancer `scripts/start-vm.ps1` depuis ce dossier.
 L’archive contient l’image, ce lanceur et sa fiche d’intégrité.
 
@@ -150,26 +155,33 @@ Points d’entrée : [Suchu](docs/suchu-on-vex.md),
 [Ultra-Space](docs/ultra-space.md), [ORA](docs/ora-migration.md),
 [FlowSched](docs/flowsched.md) et [format `.driver`](docs/driver-format.md).
 
-## Validation du snapshot
+## Validation de v0.29.2
 
-L’image publiée est **l’image déjà testée**, sans nouveau rebuild du noyau pour
-cette mise en ligne. Les runners Windows complets et le census des exports passent
-en VM **1 et 4 vCPU**, ainsi que les smokes inclus de TLS/FPU Linux, W^X, fautes,
-ownership mémoire, IPC et isolation Ultra-Space. Les tests de référence hôte et
-les six tests de graphe PE sont également documentés.
+L’image publiée provient **exactement de la copie fournie**, sans nouveau build
+ni changement de ses octets pour la publication. Le noyau extrait de cette ISO
+correspond au noyau compilé présent dans la copie. Les tailles et SHA-256 sont
+conservés dans [`release/image.json`](release/image.json).
 
-Le lancement Chrome reste une **trace de progression**, pas un test réussi de son
-interface : `USER32.dll!FindWindowExW` est absent, et Crashpad rencontre un parent
-de répertoire manquant. Le package plus large comporte encore de nombreux contrats
-manquants. Aucun support complet Windows ou Vulkan n’est annoncé.
+Le contrôle de publication est volontairement ciblé : démarrage UEFI en **4 vCPU /
+5 Gio**, bureau 1920×1080 et contrôle du Terminal/arrêt natif. Il ne remplace pas
+une nouvelle campagne de régression en 1 et 4 vCPU. Les résultats historiques des
+runners et des contrats restent documentés, avec leurs dates et leurs limites.
+Voir [la fiche de publication](docs/published-vm-check.md).
 
-[État précis Windows/Chrome](docs/windows-startup-progress-2026-10-18.md) ·
+KSW (**KyIl Subsystem for Windows**) exécute directement les PE en userspace.
+La frontière documentée du checkpoint Chrome est le chargement des dépendances
+statiques de `chrome.dll` : **157 contrats statiques manquent encore**, dont le
+provider `CRYPT32.dll`. Les imports retardés et résolutions dynamiques constituent
+d’autres étapes. **Aucune fenêtre Chrome fonctionnelle n’est validée.**
+KSL désigne exclusivement la personnalité Linux. Aucun support complet Windows
+ou Vulkan n’est annoncé.
+
+[Dernier lot d’imports KSW](docs/windows-import-batch-2026-10-18.md) ·
 [frontière structurée](docs/windows-chrome-main-frontier.json) ·
 [état SMP](docs/smp-progress.md) · [portage D630](docs/d630-port.md)
 
-L’ISO contient les composants de test et runtime du checkpoint, notamment le package
-Chrome de validation ; elle ne contient pas les disques de données de développement.
-Le support matériel et les performances restent à vérifier sur chaque machine.
+La release ne contient aucun disque de données personnel. Le support matériel,
+la persistance et les performances restent à vérifier dans chaque configuration.
 
 ## Licence et composants tiers
 

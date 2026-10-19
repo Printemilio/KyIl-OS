@@ -94,8 +94,9 @@ void wr_parameters_cwd(const char *text){
     wr_lock(&environment_gate);if(params.cwd.buffer && parameters_cwd_length(wr_utf16(text,cwd_w,512)))wr_exit(0xc000000du);wr_unlock(&environment_gate);
 }
 int wr_module_ldr(module *m) {
-    if(unicode(&m->ldr.full_name,m->path,m->full_name,512) ||
-        unicode(&m->ldr.base_name,m->name,m->base_name,128))return -1;
+    int n=wr_module_guest_path(m,m->full_name,512);
+    if(n<0 || unicode(&m->ldr.base_name,m->name,m->base_name,128))return -1;
+    m->ldr.full_name=(wr_unicode){(uint16_t)(n*2),(uint16_t)((n+1)*2),0,m->full_name};
     m->ldr.base=m->base;m->ldr.entry=m->image.entry?m->base+m->image.entry:0;
     m->ldr.size=m->image.size;m->ldr.refs=1;m->ldr.tls_index=(uint16_t)m->tls.index;
     link_append(&ldr.load,&m->ldr.load);link_append(&ldr.memory,&m->ldr.memory);
@@ -196,6 +197,7 @@ static int stack(wr_thread *t,size_t reserve,size_t commit) {
     if(wr_protect((void *)(uintptr_t)t->teb.stack_limit,commit,PE_R|PE_W)) {wr_unmap(t->stack,reserve);t->stack=0;return -1;}return 0;
 }
 static void free_record(wr_thread *t) {
+    if(t->teb.tid){wr_user_thread_exit((uint32_t)t->teb.tid);wr_winsock_thread_exit((uint32_t)t->teb.tid);}
     wr_object_thread_exit(t);
     wr_completion_thread_exit(t);
     apc_cleanup(t);
@@ -253,6 +255,9 @@ int wr_env_main(uint64_t argc,char **argv,module *exe) {
     uint64_t low,high;if(wr_context(&low,&high,0) || !low || !high)return -1;
     main_thread->teb.stack_base=high;main_thread->teb.stack_limit=low;
     if(teb_bind(main_thread) || wr_env_allocate_tls(main_thread))return -1;
+    /* A native launch has no Windows logon environment. Project the actual
+       confined prefix/profile; an explicit CreateProcess environment is exact. */
+    if(!wr_boot && wr_environment_defaults())return -1;
     for(unsigned i=0;i<wr_modules_count();i++)if(wr_module_ldr(wr_module_at(i)))return -1;
     wr_xstate_init();extern void wr_fault_entry(void);
     vex_event_register_req_t r={.event_id=VEX_EVENT_SYNCHRONOUS_FAULT,.handler=(uintptr_t)wr_fault_entry,
@@ -281,6 +286,7 @@ void wr_tls_callbacks(module *m,unsigned reason) {
 }
 static void end_thread(unsigned code) {
     wr_thread *t=(void *)wr_current_teb();
+    wr_user_thread_exit((uint32_t)t->teb.tid);wr_winsock_thread_exit((uint32_t)t->teb.tid);
     apc_cleanup(t);
     extern void wr_fls_thread_exit(wr_thread *);wr_fls_thread_exit(t);
     wr_loader_lock();wr_loader_thread_notify(3);t->result=code;t->finished=1;
@@ -585,7 +591,7 @@ void wr_env_stop_peers(unsigned status) {
     /* Do not stop a peer while it owns userspace object metadata. These gates
      * never require loader_gate, so this order also matches record retirement.
      * Keep them until native clear-on-exit confirms all peer contexts stopped. */
-    wr_console_quiesce(1);wr_registered_wait_quiesce(1);wr_object_quiesce(1);wr_completion_quiesce(1);wr_job_quiesce(1);wr_files_quiesce(1);wr_pipes_quiesce(1);wr_process_quiesce(1);wr_namespace_quiesce(1);wr_environment_quiesce(1);
+    wr_winsock_quiesce(1);wr_token_quiesce(1);wr_user_quiesce(1);wr_console_quiesce(1);wr_registered_wait_quiesce(1);wr_object_quiesce(1);wr_completion_quiesce(1);wr_job_quiesce(1);wr_files_quiesce(1);wr_pipes_quiesce(1);wr_process_quiesce(1);wr_namespace_quiesce(1);wr_environment_quiesce(1);
     for(wr_thread *t=threads;t;t=t->next)if(t!=self) {
         saved[at++]=t;__atomic_add_fetch(&t->handle_refs,1,__ATOMIC_SEQ_CST);
         wr_lock(&t->apc_gate);
@@ -596,11 +602,11 @@ void wr_env_stop_peers(unsigned status) {
         while(__atomic_load_n(&t->alive,__ATOMIC_ACQUIRE))wr_futex(&t->alive,0,1,0);
         wr_unlock(&t->apc_gate);
     }
-    wr_registry_after_stop();wr_files_stop_worker_locked();wr_environment_quiesce(0);wr_namespace_quiesce(0);wr_process_quiesce(0);wr_pipes_quiesce(0);wr_files_quiesce(0);wr_job_quiesce(0);wr_completion_quiesce(0);wr_object_quiesce(0);wr_registered_wait_quiesce(0);wr_console_quiesce(0);
+    wr_registry_after_stop();wr_files_stop_worker_locked();wr_environment_quiesce(0);wr_namespace_quiesce(0);wr_process_quiesce(0);wr_pipes_quiesce(0);wr_files_quiesce(0);wr_job_quiesce(0);wr_completion_quiesce(0);wr_object_quiesce(0);wr_registered_wait_quiesce(0);wr_console_quiesce(0);wr_user_quiesce(0);wr_token_quiesce(0);wr_winsock_quiesce(0);
     /* Wait registrations and mutex ownership belong to the dead execution
        context, not to its still-open inspection HANDLE. Retire them before
        DLL_PROCESS_DETACH can signal or wait on these userspace objects. */
-    for(size_t i=0;i<count;i++)wr_object_thread_exit(saved[i]);
+    for(size_t i=0;i<count;i++){wr_object_thread_exit(saved[i]);wr_winsock_thread_exit((uint32_t)saved[i]->teb.tid);}
     wr_loader_lock();for(size_t i=0;i<count;i++)__atomic_sub_fetch(&saved[i]->handle_refs,1,__ATOMIC_SEQ_CST);reap();wr_loader_unlock();
     if(saved)wr_native_free(saved);
 }

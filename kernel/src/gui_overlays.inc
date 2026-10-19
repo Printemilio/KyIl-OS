@@ -285,30 +285,37 @@ static void draw_app_switcher_overlay(void) {
     }
 }
 
+/* Row under the pointer while the menu is open (-1: none). */
+static int context_menu_hover = -1;
+
 static void draw_context_menu(void) {
-    const uint32_t menu   = pack_color(20, 18, 32);
-    const uint32_t border = pack_color(48, 44, 72);
-    const uint32_t sep    = pack_color(34, 30, 52);
-    const uint32_t text   = pack_color(212, 206, 236);
-    const uint32_t accent = pack_color(92, 82, 148);
+    const ui_theme_t *theme = ui_theme();
+    const uint32_t menu   = theme_px(theme->window);
+    const uint32_t border = theme_px(theme->field_border);
+    const uint32_t sep    = theme_px(theme->divider);
+    const uint32_t text   = theme_px(theme->text);
+    const uint32_t accent = theme_px(theme->accent);
     const uint64_t menu_w = GUI_CONTEXT_MENU_WIDTH;
     const uint64_t menu_h = GUI_CONTEXT_MENU_HEIGHT;
     const uint64_t x = context_menu_x;
     const uint64_t y = context_menu_y;
-    static const char *labels[] = { "Terminal", "Files", "Browser", "Paint", "Editor", "Shutdown", "Reboot" };
+    /* Applications | appearance | power */
+    const char *labels[] = { "Terminal", "Files", "Browser", "Paint", "Editor",
+        ui_theme_mode() == UI_THEME_DARK ? "Light mode" : "Dark mode", "Shutdown", "Reboot" };
 
     if (vex_lvgl_ui_ready()) {
+        vex_lvgl_ui_set_context_hover(context_menu_hover);
         vex_lvgl_ui_draw_context_menu((uint32_t)x, (uint32_t)y,
-            labels, NULL, 7u);
+            labels, NULL, 8u);
         context_menu_visible = 1;
         return;
     }
     fill_rounded_rect(x, y, menu_w, menu_h, 7u, border);
     fill_rounded_rect(x + 1u, y + 1u, menu_w - 2u, menu_h - 2u, 6u, menu);
 
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < 8; ++i) {
         const uint64_t row_y = y + 8u + (uint64_t)i * GUI_CONTEXT_MENU_ROW_HEIGHT;
-        if (i == 1 || i == 3) {
+        if (i == 5 || i == 6) {
             fill_rect(x + 14u, row_y - 4u, menu_w - 28u, 1u, sep);
         }
         fill_rounded_rect(x + GUI_CONTEXT_MENU_PAD, row_y,
@@ -327,6 +334,7 @@ static void open_context_menu(void) {
         ? gui_framebuffer->height - GUI_CONTEXT_MENU_HEIGHT : 0u;
     context_menu_x = cursor_x < max_x ? cursor_x : max_x;
     context_menu_y = cursor_y < max_y ? cursor_y : max_y;
+    context_menu_hover = -1;
     draw_context_menu();
 }
 
@@ -361,7 +369,7 @@ static int context_menu_item_at(uint64_t x, uint64_t y) {
 
     {
         const uint64_t item = (y - context_menu_y - 8u) / GUI_CONTEXT_MENU_ROW_HEIGHT;
-        if (item >= 7u) {
+        if (item >= 8u) {
             return -1;
         }
 

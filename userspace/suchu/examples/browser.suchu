@@ -1,10 +1,13 @@
 // Native KyIlOS browser. Suchu owns tabs, navigation, chrome and input routing.
 // WebKit owns only each web viewport. No HTML browser UI or snapshot transport.
+// Colours are system theme tokens (window, text, divider...): the browser
+// follows the dark and the light theme of the desktop.
 import browser;
 import draw;
 import keys;
 import mouse;
 import chrome;
+import "kyil_icons.suchu";
 
 tabs = [[1, "New Page", "", 0, "", false, false, -1, -1]];
 selected = 0;
@@ -76,6 +79,7 @@ fun close_tab(index) {
 }
 fun navigate() {
   text = get_text(if is_focused(home_search) then home_search else address).trim();
+  if text == "" { return; }
   try {
     uri = browser.normalize(text);
     enqueue(4, tabs[selected][0], uri);
@@ -141,30 +145,31 @@ fun pump() {
     else { notice = "WebKit input channel failed: " @ result; sending = false; }
   }
   downloads = browser.downloads();
-  set_enabled(back, round(floor(tabs[selected][3] / 2)) % 2 == 1);
-  set_enabled(forward, round(floor(tabs[selected][3] / 4)) % 2 == 1);
 }
-fun draw_reload() {
-  draw.clear(2105380);
-  if tabs[selected][3] % 2 == 1 {
-    draw.line(11, 9, 21, 19, 1.5, 15658734);
-    draw.line(21, 9, 11, 19, 1.5, 15658734);
-  } else {
-    angle = 0.5;
-    while angle < 5.8 {
-      next = min(5.8, angle + 0.35);
-      draw.line(16 + cos(angle) * 7, 14 + sin(angle) * 7,
-        16 + cos(next) * 7, 14 + sin(next) * 7, 1.5, 15658734);
-      angle = next;
-    }
-    draw.line(22, 11, 23, 5, 1.5, 15658734);
-    draw.line(22, 11, 16, 10, 1.5, 15658734);
-  }
-  b = get_bounds(reload);
-  if mouse.pressed() && mouse.x() >= b[0] && mouse.y() >= b[1] &&
-    mouse.x() < b[0] + b[2] && mouse.y() < b[1] + b[3] {
-    enqueue(if tabs[selected][3] % 2 == 1 then 8 else 7, tabs[selected][0], "");
-  }
+fun hovering(id) {
+  b = get_bounds(id);
+  return mouse.x() >= b[0] && mouse.y() >= b[1] && mouse.x() < b[0] + b[2] && mouse.y() < b[1] + b[3];
+}
+// 32px icon button in a toolbar canvas; true when clicked.
+fun tool(canvas, x, name, enabled) {
+  b = get_bounds(canvas); lx = mouse.x() - b[0];
+  over = hovering(canvas) && lx >= x && lx < x + 32;
+  if over && enabled { kyil_icons.plate(x, 0, 32, 32, true, mouse.down()); }
+  kyil_icons.icon(name, x + 7, 7, 18, if !enabled then "faint" else if over then "text" else "muted");
+  return over && enabled && mouse.pressed();
+}
+fun draw_nav() {
+  draw.clear("window"); state = tabs[selected][3];
+  if tool(nav, 0, "back", round(floor(state / 2)) % 2 == 1) { focus_web(false); enqueue(5, tabs[selected][0], ""); }
+  if tool(nav, 34, "forward", round(floor(state / 4)) % 2 == 1) { focus_web(false); enqueue(6, tabs[selected][0], ""); }
+  loading = state % 2 == 1;
+  if tool(nav, 68, if loading then "stop" else "reload", true) { enqueue(if loading then 8 else 7, tabs[selected][0], ""); }
+}
+fun draw_actions() {
+  draw.clear("window");
+  if downloads_open { draw.round_rect(0, 0, 32, 32, 7, "accent_soft"); }
+  if tool(actions, 0, "download", true) { focus_web(false); downloads_open = !downloads_open; }
+  if len(downloads) > 0 { draw.circle(26, 7, 3.5, "accent"); }
 }
 fun route_events() {
   bounds = get_bounds(content);
@@ -205,7 +210,7 @@ fun route_events() {
       if down && !inside { focus_web(false); }
       if down && inside {
         if downloads_open {
-          row = round(floor((y - 48) / 66));
+          row = round(floor((y - 56) / 66));
           if row >= 0 && row < len(downloads) {
             if downloads[row][2] == 1 { enqueue(15, downloads[row][0], ""); }
             else if downloads[row][2] == 2 {
@@ -232,87 +237,150 @@ fun route_events() {
     }
   }
 }
+// The tab strip of the Figma frame: plain tabs separated by hairlines, a "+"
+// after them and a divider underneath. The selected page is in full text
+// colour (and underlined once there are several); × appears on hover.
 fun draw_tabs() {
   // Generic Input editing runs between Timer dispatch and render. Submit
   // after it, so Enter includes the last characters in the same event batch.
   if submit_requested { submit_requested = false; navigate(); }
-  width = draw.width();
+  width = draw.width(); strip = 36;
   count = len(tabs);
   clicked_tab = false;
+  draw.clear("window");
   // RAW pointer positions may lie in the native title bar (negative client
   // y). A window control/drag must never hit a tab or the new-page button.
-  strip_click = mouse.pressed() && mouse.y() >= 0 && mouse.y() < 36 &&
-    mouse.x() >= 0 && mouse.x() < width;
-  tab_width = min(190, max(72, round(floor((width - 40) / len(tabs)))));
+  over = mouse.y() >= 0 && mouse.y() < strip && mouse.x() >= 0 && mouse.x() < width;
+  strip_click = mouse.pressed() && over;
+  tab_width = min(220, max(90, round(floor((width - 48) / count))));
   i = 0;
-  while i < len(tabs) {
+  while i < count {
     x = i * tab_width;
-    draw.rect(x, 0, tab_width - 2, 34, if i == selected then 2105380 else 1184276);
-    draw.line(x, 34, x + tab_width - 2, 34, 1, 4927836);
-    draw.text(x + 12, 9, browser.prefix(tabs[i][1], max(4, round(floor((tab_width - 48) / 8)))), 14, 15658734);
-    draw.text(x + tab_width - 24, 9, "×", 14, 10066329);
-    if strip_click && mouse.x() >= x && mouse.x() < x + tab_width {
+    hovered = over && mouse.x() >= x && mouse.x() < x + tab_width;
+    if hovered && i != selected { draw.rect(x, 0, tab_width, strip, "hover"); }
+    title = browser.prefix(tabs[i][1], max(4, round(floor((tab_width - 44) / 8))));
+    tw = draw.measure(title, 15);
+    draw.text(x + max(12, (tab_width - tw) / 2), 9, title, 15, if i == selected then "text" else "muted");
+    if count > 1 && i == selected { draw.rect(x + 12, strip - 2, tab_width - 24, 2, "accent"); }
+    if hovered { draw.text(x + tab_width - 22, 8, "×", 16, if mouse.x() >= x + tab_width - 30 then "text" else "muted"); }
+    draw.line(x + tab_width, 0, x + tab_width, strip, 1, "divider");
+    if strip_click && hovered {
       clicked_tab = true;
       if mouse.x() >= x + tab_width - 30 { close_tab(i); }
       else { select_tab(i); }
     }
     i = i + 1;
   }
-  draw.text(len(tabs) * tab_width + 12, 7, "+", 18, 15658734);
-  if !clicked_tab && strip_click && mouse.x() >= count * tab_width { new_tab(); }
+  plus_x = count * tab_width;
+  plus_hover = over && mouse.x() >= plus_x && mouse.x() < plus_x + 40;
+  draw.text(plus_x + 13, 6, "+", 20, if plus_hover then "text" else "muted");
+  draw.line(0, strip + 0.5, width, strip + 0.5, 1, "divider");
+  if !clicked_tab && strip_click && mouse.x() >= plus_x && mouse.x() < plus_x + 40 { new_tab(); }
+}
+// A pointy-top hexagon outline, the KyIlOS mark: six strokes along the
+// centre line of the ring, with round joins at the corners.
+fun hexagon(cx, cy, radius, stroke, ink) {
+  r = radius - stroke / 2; k = 0;
+  while k < 6 {
+    a = (k * 60 - 90) * 3.14159265 / 180; b = ((k + 1) * 60 - 90) * 3.14159265 / 180;
+    draw.line(cx + cos(a) * r, cy + sin(a) * r, cx + cos(b) * r, cy + sin(b) * r, stroke, ink);
+    draw.circle(cx + cos(a) * r, cy + sin(a) * r, stroke / 2, ink);
+    k = k + 1;
+  }
+}
+// "KyIl-Br⬡wser": Inter with the hexagon standing in for the o.
+fun draw_brand() {
+  draw.clear("window");
+  size = 50; left = "KyIl-Br"; right = "wser";
+  cap = size * 0.6; radius = cap * 0.52; hex_w = radius * 1.732; gap = size * 0.03;
+  lw = draw.measure(left, size); rw = draw.measure(right, size);
+  total = lw + gap + hex_w + gap + rw;
+  x = (draw.width() - total) / 2; y = (draw.height() - size) / 2;
+  draw.text(x, y, left, size, "text");
+  hexagon(x + lw + gap + hex_w / 2, y + size * 0.45, radius, size * 0.056, "text");
+  draw.text(x + lw + gap * 2 + hex_w, y, right, size, "text");
+}
+fun draw_search_mark() {
+  draw.clear("window");
+  hovered = hovering(search_mark);
+  hexagon(draw.width() / 2, draw.height() / 2, 10, 1.6, if hovered then "accent" else "text");
+  if mouse.pressed() && hovered { navigate_home(); }
 }
 fun draw_content() {
   w = round(draw.width()); h = round(draw.height());
   b = get_bounds(content);
+  loading = tabs[selected][3] % 2 == 1;
   if downloads_open {
-    draw.clear(1184276);
-    draw.text(24, 18, "Downloads", 24, 15658734);
+    draw.clear("window");
+    draw.text(24, 20, "Downloads", 24, "text");
+    if len(downloads) == 0 { draw.text(24, 64, "Nothing downloaded yet", 14, "muted"); }
     i = 0;
     while i < len(downloads) {
-      d = downloads[i]; y = 50 + i * 66;
-      draw.text(24, y, d[5], 16, 15658734);
+      d = downloads[i]; y = 64 + i * 66;
+      draw.round_rect(16, y - 8, w - 32, 58, 6, if i % 2 == 0 then "panel" else "window");
+      draw.text(28, y, d[5], 16, "text");
       label = if d[2] == 1 then "Receiving — click to cancel" else if d[2] == 2 then "Saved — click to open" else if d[2] == 4 then "Cancelled" else d[7];
-      draw.text(24, y + 22, label @ "   " @ d[3] @ " / " @ d[4] @ " bytes", 12, 11182266);
+      draw.text(28, y + 24, label @ "   " @ d[3] @ " / " @ d[4] @ " bytes", 12, "muted");
       i = i + 1;
     }
   } else {
     frame = browser.draw(tabs[selected][0], [round(b[0]), round(b[1]), w, h]);
-    if !frame { draw.text(24, 24, "Waiting for WebKit content…", 16, 11182266); }
-    if tabs[selected][4] != "" { draw.rect(12, 12, w - 24, 58, 3416106); draw.text(24, 30, tabs[selected][4], 14, 16761024); }
+    if !frame { draw.clear("window"); draw.text(24, 24, "Loading…", 16, "muted"); }
+    if tabs[selected][4] != "" {
+      draw.round_rect(12, 12, w - 24, 58, 6, "panel");
+      draw.rect(12, 12, 3, 58, "danger");
+      draw.text(28, 32, tabs[selected][4], 14, "text");
+    }
   }
-  if notice != "" { draw.text(12, h - 24, notice, 13, 16755370); }
+  // While a page loads: a slim accent comet running along the top edge.
+  if loading && !downloads_open {
+    t = browser.time() / 1000; x = ((t * 0.9) - floor(t * 0.9)) * (w + 240) - 240;
+    draw.round_rect(max(0, x), 0, min(240, w - max(0, x)), 2, 1, "accent");
+  }
+  if notice != "" {
+    nw = draw.measure(notice, 13);
+    draw.round_rect(12, h - 40, nw + 24, 28, 14, "panel");
+    draw.text(24, h - 33, notice, 13, "warning");
+  }
 }
 
 Window("KyIl Browser", 1100px, 760px) {
-  background: #121214;
+  background: window;
+  color: text;
   layout: column;
   padding: 0px;
   spacing: 0px;
   exit-key: "none";
-  Canvas { id: "tabstrip"; width: fill; height: 36px; onDraw: { draw_tabs(); }; }
+  Canvas { id: "tabstrip"; width: fill; height: 37px; onDraw: { draw_tabs(); }; }
   Row {
     id: "toolbar";
-    width: fill; height: 42px; padding: 6px; spacing: 6px; align: center;
-    background: #121214; color: #eeeeee; font-size: 16px;
-    Button { id: "back"; text: "‹"; width: 32px; height: 28px; background: #202024; onClick: { focus_web(false); enqueue(5, tabs[selected][0], ""); }; }
-    Button { id: "forward"; text: "›"; width: 32px; height: 28px; background: #202024; onClick: { focus_web(false); enqueue(6, tabs[selected][0], ""); }; }
-    Canvas { id: "reload"; width: 32px; height: 28px; onDraw: { draw_reload(); }; }
-    Input { id: "address"; width: fill; height: 28px; padding: 6px; border-radius: 4px; background: #202024; color: #eeeeee; font-size: 14px; placeholder: "Search or enter address"; }
-    Button { text: "Go"; width: 40px; height: 28px; background: #39244d; onClick: { navigate(); }; }
-    Button { text: "↓"; width: 32px; height: 28px; background: #202024; onClick: { focus_web(false); downloads_open = !downloads_open; }; }
+    width: fill; height: 48px; padding: 8px; spacing: 8px; align: center;
+    background: window; color: text; font-size: 14px;
+    Canvas { id: "nav"; width: 100px; height: 32px; onDraw: { draw_nav(); }; }
+    Input { id: "address"; width: fill; height: 32px; padding: 12px; border-radius: 9px; background: field; border-color: field_border; focus-color: accent; color: text; font-size: 13px; placeholder: "Search or enter address"; }
+    Canvas { id: "actions"; width: 32px; height: 32px; onDraw: { draw_actions(); }; }
   }
   Column {
-    id: "home"; width: fill; height: fill; align: center; spacing: 20px;
+    id: "home"; width: fill; height: fill; align: center; spacing: 0px; background: window;
     Spacer { height: fill; }
-    Label { text: "KyIl Browser"; color: #aa88ff; font-size: 42px; }
+    Canvas { id: "brand"; width: fill; height: 72px; onDraw: { draw_brand(); }; }
+    Spacer { height: 26px; }
+    // The search box: a 1px frame (the row's colour showing around its
+    // children) holding the field and the hexagon, as in the Figma frame.
     Row {
-      width: 60%; height: 40px; spacing: 8px;
-      Input { id: "home_search"; width: fill; height: 38px; padding: 10px; border-radius: 4px; background: #202024; color: #eeeeee; font-size: 14px; placeholder: "Search what you want …"; }
-      Button { text: "Go"; width: 44px; height: 38px; background: #39244d; color: #eeeeee; onClick: { navigate_home(); }; }
+      width: 60%; height: 44px; padding: 1px; spacing: 0px; background: field_border; border-radius: 5px;
+      Input { id: "home_search"; width: fill; height: 42px; padding: 14px; border-radius: 4px; background: window; border-color: field_border; focus-color: field_border; color: text; font-size: 14px; placeholder: "Search what you want ..."; }
+      Canvas { id: "search_mark"; width: 46px; height: 42px; onDraw: { draw_search_mark(); }; }
+    }
+    Row {
+      width: 60%; height: 22px; padding: 4px;
+      Spacer { width: fill; }
+      Label { text: "Ctrl + Space to talk"; color: faint; font-size: 11px; }
+      Spacer { width: 20px; }
     }
     Spacer { height: fill; }
   }
-  Canvas { id: "content"; width: fill; height: fill; background: #121214; onDraw: { draw_content(); }; }
+  Canvas { id: "content"; width: fill; height: fill; background: window; onDraw: { draw_content(); }; }
   Timer {
     interval: 16ms;
     onTick: {

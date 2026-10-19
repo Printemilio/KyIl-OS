@@ -49,6 +49,10 @@ void mainCRTStartup(void) {
     check(!WriteFile(h,data,1,&written,0) && GetLastError()==5,"windows-files: readonly rights FAIL\n");
     check(!ReadFile(h,(void *)0xffff800000001000ull,1,&written,0) && GetLastError()==998,"windows-files: invalid buffer FAIL\n");
     check(CloseHandle(h),"windows-files: close FAIL\n");
+    h=CreateFileW(path,0x80000000u,3,0,3,0x80,0);
+    check(h!=(void *)-1,"windows-files: KSW protected share=3 FAIL\n");
+    check(!DeleteFileW(path) && GetLastError()==5,"windows-files: native name protection FAIL\n");
+    check(ReadFile(h,copy,1,&written,0) && written==1 && copy[0]==data[0] && CloseHandle(h),"windows-files: protected actual bytes/close FAIL\n");
     check(DeleteFileW(path) && GetFileAttributesW(path)==0xffffffffu && GetLastError()==2,
         "windows-files: actual confined deletion FAIL\n");
     check(!DeleteFileW(path) && GetLastError()==2,"windows-files: repeated deletion FAIL\n");

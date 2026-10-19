@@ -17,6 +17,8 @@ int vex_fd_transfer_allowed(void *opaque) {
         return (((ladybird_file_ctx_t *)o->ctx)->root_rights&FS_ROOT_TRANSFER)!=0;
     if(o->ops==&dir_ops && ((ladybird_dir_ctx_t *)o->ctx)->root)
         return (((ladybird_dir_ctx_t *)o->ctx)->root_rights&FS_ROOT_TRANSFER)!=0;
+    if(o->ops==&iso_stream_ops && ((ladybird_iso_stream_ctx_t *)o->ctx)->root)
+        return (((ladybird_iso_stream_ctx_t *)o->ctx)->root_rights&FS_ROOT_TRANSFER)!=0;
     return 1;
 }
 static int root_install(fs_root_t *root,unsigned rights,uint32_t uid,uint32_t caps) {
@@ -53,6 +55,7 @@ typedef struct {root_call call;const char *relative;} remove_call;
 static int root_remove_call(const char *path,void *opaque) {
     remove_call *r=opaque;root_call *c=&r->call;
     if(fs_root_path_pinned(path))return -EBUSY;
+    if(!fs_namespace_mutation_allowed(path))return -EACCES;
     /* fs_root_invoke follows the terminal link. Refuse that case explicitly:
      * removing its target is not a correct substitute for unlinking the link. */
     char anchor[512],original[1024];fs_metadata_t metadata;
@@ -65,7 +68,12 @@ static int root_remove_call(const char *path,void *opaque) {
     if(fs_access_path(path,0,1,0,0))return -EACCES;
     uint64_t flags=fd_inventory_lock();int busy=0;
     for(ladybird_file_ctx_t *f=live_file_contexts;f;f=f->live_next)
-        if(!strcmp(f->path,path)){busy=1;break;}
+        if(!strcmp(f->path,path)){
+            /* A protected readonly description cannot flush/recreate a name.
+               Its name pin is explicitly overridable by native FS_ADMIN. */
+            if(f->object->name_protection && !f->write_allowed &&
+               (fs_root_credential_caps(scheduler_current_capabilities())&VEX_CAP_FS_ADMIN))continue;
+            busy=1;break;}
     fd_inventory_unlock(flags);
     if(busy)return -EBUSY;
     return unlink(path)<0?-*ladybird_errno_location():0;
@@ -79,7 +87,7 @@ static int root_open_call(const char *path,void *opaque) {
     /* A nonexistent image must reach open's ENOENT path, not become EACCES.
        The root namespace transaction still spans access checking and open. */
     if((c->flags&VEX_FS_OPEN_EXECUTABLE) && path_exists_any(path) && fs_access_path(path,1,0,1,0))return -EACCES;
-    int fd=vex_open_mode(path,(int)(c->flags&~(VEX_FS_OPEN_REGULAR|VEX_FS_OPEN_EXECUTABLE)),c->mode);
+    int fd=vex_open_mode_impl(path,(int)(c->flags&~(VEX_FS_OPEN_REGULAR|VEX_FS_OPEN_EXECUTABLE|VEX_FS_OPEN_PROTECTED)),c->mode,!!(c->flags&VEX_FS_OPEN_PROTECTED));
     if(fd>=0 && (c->flags&VEX_FS_OPEN_EXECUTABLE)) {
         ladybird_fd_object_t *o=ladybird_fd_acquire(fd);
         if(!o || o->ops!=&file_ops) {if(o)ladybird_fd_release(o);close(fd);return -ENOTSUP;}
@@ -110,10 +118,11 @@ int vex_fs_root_derive(int fd,const char *path,unsigned rights) {
     root_call c={.rights=rights};return root_call_fd(fd,path,rights,root_derive_call,&c);
 }
 int vex_fs_root_open(int fd,const char *path,unsigned flags,unsigned mode) {
-    const unsigned allowed=O_ACCMODE|O_CREAT|LADYBIRD_O_EXCL|O_TRUNC|O_APPEND|O_NONBLOCK|O_CLOEXEC|LINUX_O_DIRECTORY|VEX_FS_OPEN_REGULAR|VEX_FS_OPEN_EXECUTABLE;
+    const unsigned allowed=O_ACCMODE|O_CREAT|LADYBIRD_O_EXCL|O_TRUNC|O_APPEND|O_NONBLOCK|O_CLOEXEC|LINUX_O_DIRECTORY|VEX_FS_OPEN_REGULAR|VEX_FS_OPEN_EXECUTABLE|VEX_FS_OPEN_PROTECTED;
     if((flags&~allowed) || (flags&O_ACCMODE)==O_ACCMODE || mode&~0777u ||
         (flags&(LINUX_O_DIRECTORY|VEX_FS_OPEN_REGULAR))==(LINUX_O_DIRECTORY|VEX_FS_OPEN_REGULAR))return -EINVAL;
     if((flags&VEX_FS_OPEN_EXECUTABLE) && (flags&(O_ACCMODE|O_CREAT|O_TRUNC|O_APPEND|LINUX_O_DIRECTORY)))return -EINVAL;
+    if((flags&VEX_FS_OPEN_PROTECTED) && (flags&(O_ACCMODE|O_CREAT|O_TRUNC|O_APPEND|LINUX_O_DIRECTORY)))return -EINVAL;
     unsigned needed=(flags&O_ACCMODE)==O_WRONLY?FS_ROOT_WRITE:FS_ROOT_READ;
     if((flags&O_ACCMODE)==O_RDWR || (flags&(O_TRUNC|O_APPEND)))needed|=FS_ROOT_WRITE;
     if(flags&O_CREAT)needed|=FS_ROOT_CREATE|FS_ROOT_WRITE;
@@ -144,6 +153,7 @@ static int root_move_call(const char *ignored,void *opaque) {
     if(!strcmp(source,destination) || (m->backup && (!strcmp(source,backup) || !strcmp(destination,backup))))return -EINVAL;
     const char *names[3]={source,destination,m->backup?backup:NULL};
     for(unsigned i=0;i<3;i++)if(names[i]) {
+        if(!fs_namespace_mutation_allowed(names[i]))return -EACCES;
         if(fs_root_path_pinned(names[i]))return -EBUSY;
         if(path_is_directory(names[i]))return -ENOTSUP;
         char parent[512];memcpy(parent,names[i],strlen(names[i])+1);char *last=NULL;
@@ -157,7 +167,10 @@ static int root_move_call(const char *ignored,void *opaque) {
        Publication of new descriptions shares this namespace transaction. */
     uint64_t inventory=fd_inventory_lock();int busy=0;
     for(ladybird_file_ctx_t *f=live_file_contexts;f && !busy;f=f->live_next)
-        for(unsigned i=0;i<3;i++)if(names[i] && !strcmp(f->path,names[i])){busy=1;break;}
+        for(unsigned i=0;i<3;i++)if(names[i] && !strcmp(f->path,names[i])){
+            if(f->object->name_protection && !f->write_allowed &&
+               (fs_root_credential_caps(scheduler_current_capabilities())&VEX_CAP_FS_ADMIN))continue;
+            busy=1;break;}
     fd_inventory_unlock(inventory);if(busy)return -EBUSY;
     if(!path_exists_any(source))return -ENOENT;
     if(m->replace) {

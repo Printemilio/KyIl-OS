@@ -40,6 +40,11 @@ void gui_browser_suspend_tab_presented(uint32_t tab_id);
 void gui_browser_resume_tab_presented(uint32_t tab_id);
 void gui_browser_release_presented(void);
 uint32_t gui_color_rgb(uint8_t r, uint8_t g, uint8_t b);
+/* 0xRRGGBB theme colour (unos/ui_theme.h) in the framebuffer's format. */
+uint32_t gui_theme_color(uint32_t rgb);
+/* Switches the system palette, repaints the shell and notifies every window.
+ * mode is a ui_theme_mode_t. Returns 1 when the theme changed. */
+int gui_set_theme(int mode);
 void gui_fill_rect(uint64_t x, uint64_t y, uint64_t w, uint64_t h, uint32_t color);
 void gui_text_put_pixel(uint64_t x, uint64_t y, uint32_t color);
 void gui_sync_rect_from_framebuffer(uint64_t x, uint64_t y, uint64_t w, uint64_t h);

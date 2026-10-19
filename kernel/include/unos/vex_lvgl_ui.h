@@ -29,6 +29,13 @@ int vex_lvgl_ui_init(uint32_t screen_width, uint32_t screen_height);
 int vex_lvgl_ui_ready(void);
 void vex_lvgl_ui_begin_scene(void);
 void vex_lvgl_ui_draw_taskbar(const char *date_text, int hovered_item);
+/* The focused application's name (left) and the time (centre); applied by
+ * the next vex_lvgl_ui_draw_taskbar. */
+void vex_lvgl_ui_set_taskbar_info(const char *application, const char *clock);
+/* The window drawn with the focused frame (gradient ring, coloured lights). */
+void vex_lvgl_ui_set_active_window(uint32_t window_id);
+/* Row of the context menu under the pointer, or -1. */
+void vex_lvgl_ui_set_context_hover(int item);
 void vex_lvgl_ui_draw_window_frame(uint32_t x, uint32_t y, uint32_t width,
                                    uint32_t height, const char *title);
 /* Native window identity, independent of the number of partial redraws. */

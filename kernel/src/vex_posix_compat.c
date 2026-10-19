@@ -110,6 +110,7 @@ typedef struct ladybird_iso_stream_ctx {
     uint32_t lba;
     uint32_t file_size;
     size_t   offset;
+    uint32_t root_rights;
     vex_file_times_t times;
     fs_root_t *root;
 } ladybird_iso_stream_ctx_t;
@@ -1451,6 +1452,7 @@ ladybird_fd_object_t *ladybird_fd_object_create(void *ctx, const ladybird_fd_ops
     object->ctx = ctx;
     object->ops = ops;
     object->shared_mapping_pages = NULL;
+    object->name_protection = NULL;
     if (ops == &file_ops && ctx) {
         ladybird_file_ctx_t *file=ctx;file->object=object;
         file->identity=fs_file_identity(file->path);
@@ -1508,6 +1510,7 @@ int vex_fd_install_prepared(uint32_t owner,void *opaque,int fd,uint8_t cloexec) 
     fd_inventory_unlock(irq);return error;
 }
 
+static int vex_open_mode_impl(const char *,int,uint32_t,int);
 #include "vex_fs_root_provider.inc"
 
 int vex_web_fd_is_wk2_shared_memory(int fd) {
@@ -1576,6 +1579,7 @@ int ladybird_fd_release(ladybird_fd_object_t *object) {
         if (object->ops != NULL && object->ops->close != NULL) {
             close_result = object->ops->close(object->ctx);
         }
+        fs_name_protection_release(object->name_protection);
         kfree(object);
     }
     return close_result;
@@ -2228,11 +2232,12 @@ static unsigned root_file_rights(int flags) {
         ((flags&O_ACCMODE)==O_WRONLY?FS_ROOT_WRITE:(FS_ROOT_READ|FS_ROOT_WRITE));
     return access|((flags&O_CREAT)?FS_ROOT_CREATE:0)|(fs_root_current_rights()&FS_ROOT_TRANSFER);
 }
-int vex_open_mode(const char *path, int flags, uint32_t create_mode) {
+static int vex_open_mode_impl(const char *path, int flags, uint32_t create_mode,int protect_name) {
     /* Publication must participate in the same namespace transaction as
      * confined REMOVE. A reader snapshot not yet in the FD inventory cannot
      * race deletion and later recreate that pathname during final flush. */
     kernel_guard_t namespace __attribute__((cleanup(fs_namespace_end)))=fs_namespace_begin();
+    fs_name_protection_t *protection __attribute__((cleanup(fs_name_protection_cleanup)))=NULL;
     ora_view_t boot_content __attribute__((cleanup(ora_view_release)))={0};
     ora_view_t fs_lease_1 __attribute__((cleanup(ora_view_release)))={0};
     char normalized[LADYBIRD_MAX_PATH];
@@ -2264,6 +2269,12 @@ int vex_open_mode(const char *path, int flags, uint32_t create_mode) {
     copy_string(resolved, sizeof(resolved), normalized);
     if (!wk2_shared_path(normalized) && fs_exists(normalized)) {
         (void)resolve_fs_path(normalized, resolved);
+    }
+    if(protect_name) {
+        if(write_allowed)return set_errno(EINVAL);
+        if(ladybird_device_kind(normalized)>=0 || proc_virtual_kind(normalized) || wk2_shared_path(normalized))return set_errno(ENOTSUP);
+        int error;protection=fs_name_protect(resolved,&error);
+        if(!protection)return set_errno(-error);
     }
 
     if(VEX_COMPAT_TRACE) {
@@ -2552,6 +2563,7 @@ open_memory_file:
         return set_errno(ENOMEM);
     }
 
+    object->name_protection=protection;protection=NULL;
     installed_fd = ladybird_fd_install(object, -1);
     wk2_shared_trace("open.end", normalized, (uint32_t)flags,
                      wk2_shared_path(normalized)
@@ -2572,6 +2584,7 @@ open_iso_stream:
         stream->lba       = iso_lba;
         stream->file_size = iso_size;
         stream->offset    = 0u;
+        stream->root_rights=root_file_rights(flags);
         stream->root=fs_root_retain(fs_root_current());
         memset(&stream->times,0,sizeof(stream->times));
         (void)fs_get_times(normalized,&stream->times);
@@ -2582,9 +2595,12 @@ open_iso_stream:
             kfree(stream);
             return set_errno(ENOMEM);
         }
+        object->name_protection=protection;protection=NULL;
         return ladybird_fd_install(object, -1);
     }
 }
+
+int vex_open_mode(const char *path,int flags,uint32_t mode) {return vex_open_mode_impl(path,flags,mode,0);}
 
 int vex_web_resolve_dirfd_path(int dirfd, const char *path, char *buffer, size_t size) {
     char full_path[LADYBIRD_MAX_PATH];
@@ -3177,10 +3193,13 @@ int access(const char *path, int mode) {
 }
 
 int unlink(const char *path) {
+    kernel_guard_t namespace __attribute__((cleanup(fs_namespace_end)))=fs_namespace_begin();
     char normalized[LADYBIRD_MAX_PATH];
 
     ladybird_posix_init();
     normalize_path(path, normalized);
+
+    if(!fs_namespace_mutation_allowed(normalized))return set_errno(EACCES);
 
     if (wk2_shared_path(normalized)) {
         int found = 0;
@@ -3254,12 +3273,14 @@ unsigned vex_fd_usage_snapshot(vex_fd_usage_t *out, unsigned capacity) {
 }
 
 int rename(const char *old_path, const char *new_path) {
+    kernel_guard_t namespace __attribute__((cleanup(fs_namespace_end)))=fs_namespace_begin();
     char old_normalized[LADYBIRD_MAX_PATH];
     char new_normalized[LADYBIRD_MAX_PATH];
 
     ladybird_posix_init();
     normalize_path(old_path, old_normalized);
     normalize_path(new_path, new_normalized);
+    if(!fs_namespace_mutation_allowed(old_normalized) || !fs_namespace_mutation_allowed(new_normalized))return set_errno(EACCES);
 
     if (path_is_directory(old_normalized)) {
         const size_t old_length = string_length(old_normalized);
@@ -3342,12 +3363,14 @@ static int directory_child_visitor(const char *name, size_t size, uint8_t type, 
 
 /* POSIX rmdir: only an empty directory is removed. */
 int rmdir(const char *path) {
+    kernel_guard_t namespace __attribute__((cleanup(fs_namespace_end)))=fs_namespace_begin();
     char normalized[LADYBIRD_MAX_PATH];
     char marker[LADYBIRD_MAX_PATH];
     int has_child = 0;
 
     ladybird_posix_init();
     normalize_path(path, normalized);
+    if(!fs_namespace_mutation_allowed(normalized))return set_errno(EACCES);
 
     if (string_equals(normalized, "/")) {
         return set_errno(EBUSY);

@@ -1,5 +1,6 @@
 import "paint_model.suchu";
 import platform; import system; import draw; import chrome; import time;
+import "kyil_icons.suchu";
 d = paint_model.create(); drawing = false; last_x=0; last_y=0;
 buttons=0; pressed_tool=-1; press_at=0; long_done=false;
 palette=[16711680,0,3678463]; sizes=[5,11,18]; diameters=[12,20,28];
@@ -54,20 +55,33 @@ fun input(e,w,h,bar) {
   buttons=e[1];
 }
 fun draw_tools(bar) {
-  draw.round_rect(bar[0],bar[1],bar[2],bar[3],4,2697513);
+  // A floating glass palette: hairline frame, generous radius, line icons.
+  draw.round_rect(bar[0]-1,bar[1]-1,bar[2]+2,bar[3]+2,15,"field_border");
+  draw.round_rect(bar[0],bar[1],bar[2],bar[3],14,"panel");
   if !bar[4] {
-    draw.text_rotated(bar[0]+28,bar[1]+12,"Other Options",12,90,15855093);
-    draw.rect(bar[0]+6,bar[1]+109,32,1,6833524); draw.rect(bar[0]+6,bar[1]+259,32,1,6833524);
+    kyil_icons.icon("paint",bar[0]+13,bar[1]+34,18,"accent");
+    draw.text(bar[0]+(bar[2]-draw.measure("Paint",10))/2,bar[1]+58,"Paint",10,"faint");
+    draw.rect(bar[0]+10,bar[1]+109,bar[2]-20,1,"divider"); draw.rect(bar[0]+10,bar[1]+259,bar[2]-20,1,"divider");
   }
   rect=tool_bounds(bar,0);
-  draw.round_rect(rect[0],rect[1],rect[2],rect[3],3,if d.eraser then 11947263 else 2697513);
-  draw.text(rect[0]+12,rect[1]+7,"+",16,15855093);
+  draw.round_rect(rect[0],rect[1],rect[2],rect[3],8,if d.eraser then "accent_soft" else "panel");
+  kyil_icons.icon("eraser",rect[0]+(rect[2]-18)/2,rect[1]+(rect[3]-18)/2,18,if d.eraser then "accent" else "muted");
   for i in 1..6 {
     rect=tool_bounds(bar,i); r=rect[2]/2;
     selected=if i<=3 then !d.eraser && d.color==palette[i-1] else d.radius==sizes[i-4];
     color=if i<=3 then palette[i-1] else 14277081;
-    draw.circle(rect[0]+r,rect[1]+r,r,if selected then 16777215 else color);
-    if selected { draw.circle(rect[0]+r,rect[1]+r,max(0,r-3),color); }
+    cx=rect[0]+r; cy=rect[1]+r;
+    if i<=3 {
+      // The chosen colour wears an accent ring.
+      if selected { draw.circle(cx,cy,r+2,"accent"); draw.circle(cx,cy,r,"panel"); }
+      draw.circle(cx,cy,if selected then max(1,r-2) else r,color);
+    } else {
+      // Brush sizes: three dots of growing size on a shared rhythm, the
+      // chosen one on a soft pill (the hit areas stay the larger circles).
+      dot=[3,5,7][i-4];
+      if selected { draw.round_rect(cx-(if bar[4] then 14 else bar[2]/2-6),cy-9,if bar[4] then 28 else bar[2]-12,18,9,"accent_soft"); }
+      draw.circle(cx,cy,dot,if selected then "accent" else "muted");
+    }
   }
 }
 // The document remains authoritative for resize/clear. Ordinary updates append
@@ -116,7 +130,7 @@ fun paint() {
   draw_document(w,h);
   draw_tools(bar);
 }
-Window("KyIl Paint Suchu",1200px,720px) {
+Window("KyIl Paint",1200px,720px) {
   min-width: 320px; min-height: 220px; padding: 0px; spacing: 0px; exit-key: "none"; max-fps: 0;
   Canvas { width: fill; height: fill; onDraw: { paint(); }; }
 }

@@ -15,7 +15,7 @@ typedef struct {
     uint64_t stack_reserve,stack_commit;
     uint32_t size, headers, entry, dirs[16][2];
     uint16_t count, subsystem;
-    unsigned dll;
+    unsigned dll,relocations_stripped;
     pe_section sections[PE_MAX_SECTIONS];
 } pe_image;
 /* Parse immutable file bytes. Error strings are stable diagnostics, not errno. */

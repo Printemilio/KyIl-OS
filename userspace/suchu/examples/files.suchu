@@ -1,29 +1,36 @@
 import "files_model.suchu";
+import "kyil_icons.suchu";
 import files; import fileio; import platform; import system; import draw; import chrome;
-import textbytes;
+import textbytes; import mouse;
+// KyIl Files. A Finder-like window: icon toolbar, a sidebar of places and the
+// folder as a grid of large icons (the Figma frame) or as a list.
 cwd="/home/root"; entries=[]; selected=-1; top=0; back=[]; forward=[];
 clipboard=""; cut=false; notice=""; failed=false; info=false; modal="";
 last_buttons=0; last_click=-1; last_at=0; prefix=""; prefix_at=0;
 ready=false; row_height=30; visible_rows=10; signature="";
+view="grid"; columns=1; cell_w=112; cell_h=110; hint="";
+places=[["FAVORITES","",""],["Home","/home/root","home"],["Desktop","/home/root/Desktop","desktop"],
+        ["Downloads","/home/root/Downloads","download"],["SYSTEM","",""],["Filesystem","/","disk"],["Temporary","/tmp","clock"]];
 fun say(message,error) { notice=(if error then "Error: " else "") @ message; failed=error; }
 fun selection() { if selected>=0 && selected<len(entries) { return entries[selected]; } return none; }
 fun fingerprint(values) {
   parts=[]; for item in values { push(parts,item.name @ ":" @ item.kind @ ":" @ item.size @ ":" @ item.mode); } return "\n".join(parts);
 }
+fun page() { return if view=="grid" then visible_rows*columns else visible_rows; }
 fun reload(keep) {
   fresh=files_model.list(cwd); sig=fingerprint(fresh);
   if sig==signature && keep=="" { return; }
   if keep=="" && selection()!=none { keep=selection().name; }
   entries=fresh; signature=sig; selected=-1;
   if keep!="" && len(entries)>0 { for i in 0..(len(entries)-1) { if entries[i].name==keep { selected=i; } } }
-  top=max(0,min(top,len(entries)-visible_rows)); chrome.invalidate();
+  top=max(0,min(top,len(entries)-page())); chrome.invalidate();
 }
 fun history(stack,path) { push(stack,path); if len(stack)>16 { remove(stack,0); } }
 fun navigate(path,record) {
   target=files_model.resolve(cwd,path); fresh=files_model.list(target);
   if record && cwd!=target { history(back,cwd); forward=[]; }
   cwd=target; entries=fresh; signature=fingerprint(fresh); selected=-1; top=0;
-  set_text(location,cwd); say(cwd,false); blur(); chrome.invalidate();
+  set_text(location,cwd); notice=""; blur(); chrome.invalidate();
 }
 fun go_back() {
   if len(back)==0 { return; } target=back[len(back)-1];
@@ -48,7 +55,7 @@ fun open_selected() {
       pid=platform.spawn(item.path); push(children,pid); say("Started PID " @ pid,false);
     } else {
       if files_model.binary(item.path) { say("Binary file: no text viewer registered",true); return; }
-      platform.open_path(item.path,0); say("Open request submitted",false);
+      platform.open_path(item.path,0); say("Opening " @ item.name,false);
     }
   } else error { say(error.message,true); }
 }
@@ -59,19 +66,20 @@ fun collect_children() {
     if result[0]!=0 { remove(children,i); } else { i=i+1; }
   }
 }
-fun remember(move) { item=selection(); if item!=none { clipboard=item.path; cut=move; say((if cut then "Cut: " else "Copy: ") @ clipboard,false); } }
+fun remember(move) { item=selection(); if item!=none { clipboard=item.path; cut=move; say((if cut then "Cut " else "Copied ") @ item.name,false); } }
 fun paste() {
   if clipboard=="" { return; }
   try {
     target=if cut then files_model.move(clipboard,cwd) else files_model.copy(clipboard,cwd);
     if cut { clipboard=""; }
-    reload(files_model.basename(target)); say("Completed: " @ target,false);
+    reload(files_model.basename(target)); say("Pasted " @ files_model.basename(target),false);
   } else error { say(error.message,true); }
 }
 fun ask(kind) {
   if kind!="new" && selection()==none { return; }
   modal=kind; set_visible(dialog,true); set_visible(dialog_path,kind!="delete");
-  set_text(dialog_message,if kind=="new" then "New folder" else if kind=="rename" then "Rename " @ selection().name else "Delete " @ selection().name @ " and all its contents? This cannot be undone.");
+  set_text(dialog_message,if kind=="new" then "New folder" else if kind=="rename" then "Rename" else "Delete " @ selection().name @ "? This cannot be undone.");
+  set_text(confirm_button,if kind=="delete" then "Delete" else if kind=="new" then "Create" else "Rename");
   set_text(dialog_path,if kind=="rename" then selection().name else "");
   if kind!="delete" { focus(dialog_path); } else { blur(); }
 }
@@ -81,12 +89,16 @@ fun confirm() {
     if modal=="new" { path=files_model.create(cwd,get_text(dialog_path)); reload(files_model.basename(path)); }
     if modal=="rename" { path=files_model.rename(selection().path,get_text(dialog_path)); reload(files_model.basename(path)); }
     if modal=="delete" { files_model.erase(selection().path); reload(""); }
-    say("Completed",false); cancel();
+    notice=""; cancel();
   } else error { say(error.message,true); }
 }
+fun toggle_info() { info=!info; set_visible(info_panel,info); }
 fun ensure_visible() {
-  if selected>=0 { if selected<top { top=selected; } if selected>=top+visible_rows { top=selected-visible_rows+1; } }
+  if selected<0 { return; }
+  at=if view=="grid" then files_model.whole(selected/columns) else selected;
+  if at<top { top=at; } if at>=top+visible_rows { top=at-visible_rows+1; }
 }
+fun move_selection(delta) { if len(entries)==0 { return; } selected=max(0,min(len(entries)-1,(if selected<0 then 0 else selected+delta))); ensure_visible(); }
 fun key(key,hardware,ctrl,alt) {
   if key==27 { cancel(); return; }
   if modal!="" { if key==10 { confirm(); } return; }
@@ -95,23 +107,39 @@ fun key(key,hardware,ctrl,alt) {
   if ctrl && (key==24 || key==120 || key==88) { remember(true); return; }
   if ctrl && (key==22 || key==118 || key==86) { paste(); return; }
   if ctrl && (key==108 || key==76 || key==12) { focus(location); return; }
+  if ctrl && (key==105 || key==73) { toggle_info(); return; }
   if hardware==63 { try { reload(""); } else error { say(error.message,true); } return; }
   if hardware==60 { ask("rename"); return; }
   if hardware==211 { ask("delete"); return; }
-  if hardware==203 { go_back(); return; } if hardware==205 { go_forward(); return; }
+  // Alt+←/→ walk the history; plain arrows move the selection in the grid.
+  if hardware==203 && (alt || view=="list") { go_back(); return; }
+  if hardware==205 && (alt || view=="list") { go_forward(); return; }
   if key==8 { place(files_model.parent(cwd)); return; }
   if key==10 { open_selected(); return; }
   if len(entries)==0 { return; }
-  if hardware==200 { selected=max(0,selected-1); ensure_visible(); return; }
-  if hardware==208 { selected=min(len(entries)-1,selected+1); ensure_visible(); return; }
-  if hardware==201 { selected=max(0,selected-visible_rows); ensure_visible(); return; }
-  if hardware==209 { selected=min(len(entries)-1,selected+visible_rows); ensure_visible(); return; }
+  step=if view=="grid" then columns else 1;
+  if hardware==203 { move_selection(-1); return; }
+  if hardware==205 { move_selection(1); return; }
+  if hardware==200 { move_selection(-step); return; }
+  if hardware==208 { move_selection(step); return; }
+  if hardware==201 { move_selection(-page()); return; }
+  if hardware==209 { move_selection(page()); return; }
   if hardware==199 { selected=0; ensure_visible(); return; } if hardware==207 { selected=len(entries)-1; ensure_visible(); return; }
   if !ctrl && !alt && key>=32 && key<1114112 {
     now=platform.monotonic(); if now-prefix_at>1 { prefix=""; } prefix_at=now;
     prefix=prefix @ textbytes.character(key).lower();
     for i in 0..(len(entries)-1) { if entries[i].name.lower().startswith(prefix) { selected=i; ensure_visible(); return; } }
   }
+}
+// Index of the item under (x, y) in the listing canvas, or -1.
+fun index_at(x,y,w) {
+  if view=="grid" {
+    col=files_model.whole((x-16)/cell_w); row=files_model.whole((y-12)/cell_h);
+    if x<16 || col>=columns || y<12 { return -1; }
+    at=(top+row)*columns+col; return if at<len(entries) then at else -1;
+  }
+  if y<34 { return -1; }
+  at=top+files_model.whole((y-34)/row_height); return if at<len(entries) then at else -1;
 }
 fun events(bounds) {
   for e in platform.events() {
@@ -124,11 +152,13 @@ fun events(bounds) {
       x=e[2]-bounds[0]; y=e[3]-bounds[1]; inside=x>=0 && y>=0 && x<bounds[2] && y<bounds[3];
       held=e[1]%2==1;
       if inside && modal=="" {
-        if e[4]!=0 { top=max(0,min(max(0,len(entries)-visible_rows),top-e[4]*3)); }
-        if held && last_buttons%2==0 && y>=32 {
-          at=top+files_model.whole((y-32)/row_height);
-          if at>=0 && at<len(entries) {
-            now=platform.monotonic(); selected=at; blur();
+        rows_total=if view=="grid" then files_model.whole((len(entries)+columns-1)/columns) else len(entries);
+        if e[4]!=0 { top=max(0,min(max(0,rows_total-visible_rows),top-e[4]*(if view=="grid" then 1 else 3))); }
+        if held && last_buttons%2==0 {
+          at=index_at(x,y,bounds[2]); blur();
+          if at<0 { selected=-1; }
+          else {
+            now=platform.monotonic(); selected=at;
             if at==last_click && now-last_at<0.45 { last_click=-1; open_selected(); }
             else { last_click=at; last_at=now; }
           }
@@ -144,79 +174,156 @@ fun initialize() {
   try { navigate(cwd,false); } else error { cwd="/"; navigate(cwd,false); say(error.message,true); }
   ready=true;
 }
+fun hovering(id) {
+  b=get_bounds(id);
+  return mouse.x()>=b[0] && mouse.y()>=b[1] && mouse.x()<b[0]+b[2] && mouse.y()<b[1]+b[3];
+}
+fun local_x(id) { return mouse.x()-get_bounds(id)[0]; }
+fun local_y(id) { return mouse.y()-get_bounds(id)[1]; }
+// A 32px icon button inside a toolbar canvas; returns true when clicked.
+fun tool(canvas,x,name,enabled,label) {
+  over=hovering(canvas) && local_x(canvas)>=x && local_x(canvas)<x+32;
+  if over && enabled { kyil_icons.plate(x,0,32,32,true,mouse.down()); hint=label; }
+  kyil_icons.icon(name,x+7,7,18,if !enabled then "faint" else if over then "text" else "muted");
+  return over && enabled && mouse.pressed() && modal=="";
+}
+fun draw_nav() {
+  draw.clear("window");
+  if tool(nav,0,"back",len(back)>0,"Back") { go_back(); }
+  if tool(nav,34,"forward",len(forward)>0,"Forward") { go_forward(); }
+}
+fun draw_tools() {
+  draw.clear("window"); has=selection()!=none;
+  if tool(tools,0,"new_folder",true,"New folder") { ask("new"); }
+  if tool(tools,36,"copy",has,"Copy  (Ctrl+C)") { remember(false); }
+  if tool(tools,72,"cut",has,"Cut  (Ctrl+X)") { remember(true); }
+  if tool(tools,108,"paste",clipboard!="","Paste  (Ctrl+V)") { paste(); }
+  if tool(tools,144,"trash",has,"Delete  (Del)") { ask("delete"); }
+  if tool(tools,180,"info",has,"Properties  (Ctrl+I)") { toggle_info(); }
+  draw.rect(222,7,1,18,"divider");
+  if tool(tools,232,if view=="grid" then "list" else "grid",true,if view=="grid" then "View as list" else "View as icons") {
+    view=if view=="grid" then "list" else "grid"; top=0; ensure_visible();
+  }
+}
+fun draw_sidebar() {
+  draw.clear("panel"); y=14; h=draw.height();
+  for p in places {
+    if p[1]=="" {
+      draw.text(18,y+(if y>14 then 10 else 0),p[0],11,"faint"); y=y+(if y>14 then 32 else 22);
+    } else {
+      current=cwd==p[1];
+      over=hovering(sidebar) && local_y(sidebar)>=y && local_y(sidebar)<y+30 && local_x(sidebar)>=8 && local_x(sidebar)<draw.width()-8;
+      if current { draw.round_rect(8,y,draw.width()-16,30,7,"accent_soft"); }
+      else if over { draw.round_rect(8,y,draw.width()-16,30,7,"hover"); }
+      kyil_icons.icon(p[2],18,y+6,18,if current then "accent" else "muted");
+      draw.text(46,y+7,p[0],14,"text");
+      if over && mouse.pressed() && modal=="" { place(p[1]); }
+      y=y+32;
+    }
+  }
+  draw.rect(draw.width()-1,0,1,h,"divider");
+}
+// Large icons, as in the Figma Files frame.
+fun big_icon(item,x,y) {
+  if item.kind=="directory" {
+    draw.round_rect(x+6,y+4,22,10,3,"folder");
+    draw.round_rect(x+6,y+9,52,38,5,"folder");
+    draw.round_rect(x+6,y+15,52,32,5,"folder");
+    draw.rect(x+8,y+15,48,1,"window");
+  } else {
+    draw.round_rect(x+15,y+1,34,46,4,"paper");
+    draw.rect(x+21,y+13,22,2,"faint"); draw.rect(x+21,y+19,22,2,"faint"); draw.rect(x+21,y+25,22,2,"faint"); draw.rect(x+21,y+31,14,2,"faint");
+    if files_model.executable(item.mode) { draw.round_rect(x+34,y+34,20,14,4,"accent"); draw.text(x+37,y+34,">_",11,"on_accent"); }
+    if item.kind=="link" { draw.round_rect(x+34,y+34,16,14,4,"accent2"); kyil_icons.icon("forward",x+35,y+35,12,"on_accent"); }
+  }
+}
+fun fit(text,size,width) {
+  if draw.measure(text,size)<=width { return text; }
+  at=0; best=0;
+  while at<len(text) { at=textbytes.next(text,at); if draw.measure(textbytes.sub(text,0,at) @ "…",size)<=width { best=at; } }
+  return textbytes.sub(text,0,best) @ "…";
+}
 fun draw_listing() {
   if !ready { initialize(); }
-  b=get_bounds(listing); visible_rows=max(1,files_model.whole((b[3]-32)/row_height)); events(b);
-  w=draw.width(); h=draw.height(); draw.clear(1184276);
-  draw.rect(0,0,w,30,2105380); draw.text(16,7,"Name",14,15658734);
-  if w>540 { draw.text(w-280,7,"Kind",14,15658734); draw.text(w-150,7,"Size",14,15658734); }
-  stop=min(len(entries),top+visible_rows);
-  if stop>top { for i in top..(stop-1) {
-    item=entries[i]; y=32+(i-top)*row_height;
-    if i==selected { draw.round_rect(4,y,w-14,row_height-2,4,3880796); }
-    draw.rect(13,y+9,13,11,if item.kind=="directory" then 14332988 else if item.kind=="link" then 8562175 else 12434877);
-    label=item.name; available=max(1,files_model.whole((w-(if w>540 then 340 else 55))/8));
-    if len(label)>available { label=textbytes.sub(label,0,available) @ "…"; }
-    draw.text(37,y+7,label,14,if files_model.transient(item.name) then 11053224 else 15658734);
-    if w>540 { draw.text(w-280,y+7,item.kind,12,11710926); draw.text(w-150,y+7,files_model.size_text(item.size),12,11710926); }
-  } }
-  if len(entries)>visible_rows { draw.rect(w-7,32+(h-32)*top/len(entries),4,max(12,(h-32)*visible_rows/len(entries)),6381921); }
-  set_enabled(back_button,len(back)>0); set_enabled(forward_button,len(forward)>0);
-  for node in [open_button,rename_button,copy_button,cut_button,delete_button] { set_enabled(node,selection()!=none && modal==""); }
-  set_enabled(paste_button,clipboard!="" && modal=="");
-  text="" @ len(entries) @ " items"; if selection()!=none { text=text @ " · " @ selection().name; }
-  set_text(summary,text @ "   " @ notice);
+  b=get_bounds(listing); w=draw.width(); h=draw.height();
+  columns=max(1,files_model.whole((w-24)/cell_w));
+  visible_rows=max(1,if view=="grid" then files_model.whole((h-12)/cell_h) else files_model.whole((h-34)/row_height));
+  events(b); draw.clear("window");
+  if len(entries)==0 {
+    kyil_icons.icon("folder",w/2-18,h/2-46,36,"faint");
+    t="This folder is empty"; draw.text((w-draw.measure(t,14))/2,h/2+2,t,14,"faint");
+    return;
+  }
+  hover_at=if hovering(listing) then index_at(local_x(listing),local_y(listing),w) else -1;
+  if view=="grid" {
+    first=top*columns; stop=min(len(entries),first+(visible_rows+1)*columns);
+    if stop>first { for i in first..(stop-1) {
+      item=entries[i]; col=i%columns; row=files_model.whole(i/columns)-top;
+      x=16+col*cell_w; y=12+row*cell_h;
+      if i==selected { draw.round_rect(x+12,y-2,cell_w-24,62,10,"hover"); }
+      else if i==hover_at { draw.round_rect(x+12,y-2,cell_w-24,62,10,"panel"); }
+      big_icon(item,x+(cell_w-64)/2,y+6);
+      name=fit(item.name,12,cell_w-12); nw=draw.measure(name,12);
+      ink=if files_model.transient(item.name) then "faint" else "text";
+      if i==selected { draw.round_rect(x+(cell_w-nw)/2-6,y+66,nw+12,20,6,"accent"); ink="on_accent"; }
+      draw.text(x+(cell_w-nw)/2,y+68,name,12,ink);
+    } }
+  } else {
+    draw.text(46,10,"Name",12,"faint");
+    if w>540 { draw.text(w-280,10,"Kind",12,"faint"); draw.text(w-150,10,"Size",12,"faint"); }
+    draw.rect(12,31,w-24,1,"divider");
+    stop=min(len(entries),top+visible_rows);
+    if stop>top { for i in top..(stop-1) {
+      item=entries[i]; y=34+(i-top)*row_height;
+      if i==selected { draw.round_rect(8,y+1,w-16,row_height-2,7,"accent_soft"); }
+      else if i==hover_at { draw.round_rect(8,y+1,w-16,row_height-2,7,"hover"); }
+      kyil_icons.icon(if item.kind=="directory" then "folder" else "document",18,y+6,18,if item.kind=="directory" then "folder" else "muted");
+      label=fit(item.name,14,(if w>540 then w-340 else w-70));
+      draw.text(46,y+7,label,14,if files_model.transient(item.name) then "faint" else "text");
+      if w>540 { draw.text(w-280,y+8,item.kind,12,"muted"); draw.text(w-150,y+8,if item.kind=="directory" then "—" else files_model.size_text(item.size),12,"muted"); }
+    } }
+  }
+  rows_total=if view=="grid" then files_model.whole((len(entries)+columns-1)/columns) else len(entries);
+  if rows_total>visible_rows {
+    track=h-16; thumb=max(28,track*visible_rows/rows_total);
+    draw.round_rect(w-8,8+(track-thumb)*top/max(1,rows_total-visible_rows),4,thumb,2,"faint");
+  }
+}
+fun draw_status() {
+  draw.clear("window"); draw.rect(0,0,draw.width(),1,"divider");
+  text="" @ len(entries) @ (if len(entries)==1 then " item" else " items");
+  if selection()!=none { text=text @ "  ·  " @ selection().name @ (if selection().kind=="file" then "  ·  " @ files_model.size_text(selection().size) else ""); }
+  draw.text(14,7,text,12,"muted");
+  right=if notice!="" then notice else hint;
+  if right!="" { draw.text(draw.width()-draw.measure(right,12)-14,7,right,12,if failed && notice!="" then "danger" else "faint"); }
+  hint="";
   if info && selection()!=none {
-    item=selection(); set_text(properties,item.path @ "\n" @ item.kind @ " · " @ files_model.size_text(item.size) @ " · " @ files_model.mode_text(item.mode) @ " · uid " @ item.uid @ " / gid " @ item.gid);
-  } else { set_text(properties,"Select an item to inspect its real metadata."); }
+    item=selection(); set_text(properties,item.path @ "   ·   " @ item.kind @ "   ·   " @ files_model.size_text(item.size) @ "   ·   " @ files_model.mode_text(item.mode) @ "   ·   uid " @ item.uid @ " / gid " @ item.gid);
+  } else { set_text(properties,"Select an item to inspect it."); }
 }
 platform.install(false);
-Window("KyIl Files",900px,580px) {
-  min-width: 450px; min-height: 320px; background: #121214; layout: column; padding: 0px; spacing: 0px; exit-key: "none"; max-fps: 0;
-  Row { width: fill; height: 42px; padding: 6px; spacing: 5px; background: #202024;
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; id: "back_button"; text: "‹"; width: 28px; height: 28px; onClick: { go_back(); }; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; id: "forward_button"; text: "›"; width: 28px; height: 28px; onClick: { go_forward(); }; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Up"; height: 28px; onClick: { place(files_model.parent(cwd)); }; }
-    Input { id: "location"; width: fill; height: 28px; background: #121214; color: #eeeeee; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Go"; height: 28px; onClick: { try { navigate(get_text(location),true); } else error { say(error.message,true); } }; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Refresh"; height: 28px; onClick: { try { reload(""); say("Refreshed",false); } else error { say(error.message,true); } }; }
-  }
-  Row { width: fill; height: 40px; padding: 5px; spacing: 5px; background: #202024;
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "New folder"; height: 28px; onClick: { ask("new"); }; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; id: "open_button"; text: "Open"; height: 28px; onClick: { open_selected(); }; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; id: "rename_button"; text: "Rename"; height: 28px; onClick: { ask("rename"); }; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; id: "copy_button"; text: "Copy"; height: 28px; onClick: { remember(false); }; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; id: "cut_button"; text: "Cut"; height: 28px; onClick: { remember(true); }; }
-  }
-  Row { width: fill; height: 38px; padding: 5px; spacing: 5px; background: #202024;
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; id: "paste_button"; text: "Paste"; height: 28px; onClick: { paste(); }; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; id: "delete_button"; text: "Delete"; height: 28px; onClick: { ask("delete"); }; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Properties"; height: 28px; onClick: { info=!info; set_visible(info_panel,info); }; }
+Window("KyIl Files",980px,620px) {
+  min-width: 520px; min-height: 340px; background: window; color: text; layout: column; padding: 0px; spacing: 0px; exit-key: "none"; max-fps: 0;
+  Row { width: fill; height: 50px; padding: 9px; spacing: 10px; align: center; background: window;
+    Canvas { id: "nav"; width: 66px; height: 32px; onDraw: { draw_nav(); }; }
+    Input { id: "location"; width: fill; height: 32px; padding: 10px; border-radius: 8px; font-size: 13px; background: field; border-color: field_border; focus-color: accent; color: text; }
+    Canvas { id: "tools"; width: 264px; height: 32px; onDraw: { draw_tools(); }; }
   }
   Row { width: fill; height: fill; spacing: 0px;
-    Column { width: 130px; height: fill; padding: 8px; spacing: 7px; background: #1b1920;
-      Label { text: "Places"; color: #bdb3ce; font-size: 13px; }
-      Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Home"; width: fill; onClick: { place("/home/root"); }; }
-      Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Desktop"; width: fill; onClick: { place("/home/root/Desktop"); }; }
-      Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Downloads"; width: fill; onClick: { place("/home/root/Downloads"); }; }
-      Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Filesystem"; width: fill; onClick: { place("/"); }; }
-      Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Temporary"; width: fill; onClick: { place("/tmp"); }; }
-    }
+    Canvas { id: "sidebar"; width: 196px; height: fill; onDraw: { draw_sidebar(); }; }
     Canvas { id: "listing"; width: fill; height: fill; onDraw: { draw_listing(); }; }
   }
-  Column { id: "info_panel"; width: fill; height: 96px; padding: 7px; visible: false; background: #202024;
-    Label { id: "properties"; width: fill; height: 42px; text: ""; color: #eeeeee; font-size: 13px; }
-    Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Toggle executable"; height: 28px; onClick: { if selection()!=none { try { files_model.toggle_executable(selection().path); reload(""); } else error { say(error.message,true); } } }; }
+  Row { id: "info_panel"; width: fill; height: 48px; padding: 10px; spacing: 10px; align: center; visible: false; background: panel;
+    Label { id: "properties"; width: fill; text: ""; color: muted; font-size: 12px; }
+    Button { background: accent_soft; color: text; font-size: 13px; border-radius: 7px; padding: 8px; text: "Toggle executable"; height: 28px; onClick: { if selection()!=none { try { files_model.toggle_executable(selection().path); reload(""); } else error { say(error.message,true); } } }; }
   }
-  Column { id: "dialog"; width: fill; height: 136px; padding: 7px; spacing: 5px; visible: false; background: #30243b;
-    Label { id: "dialog_message"; text: ""; color: #eeeeee; }
-    Input { id: "dialog_path"; width: fill; height: 28px; color: #eeeeee; background: #121214; }
-    Row { spacing: 8px;
-      Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Confirm"; height: 26px; onClick: { confirm(); }; }
-      Button { background: #30243b; color: #eeeeee; font-size: 14px; border-radius: 4px; padding: 6px; text: "Cancel"; height: 26px; onClick: { cancel(); }; }
-    }
+  Row { id: "dialog"; width: fill; height: 56px; padding: 12px; spacing: 10px; align: center; visible: false; background: panel;
+    Label { id: "dialog_message"; text: ""; color: text; font-size: 13px; }
+    Input { id: "dialog_path"; width: fill; height: 32px; padding: 10px; border-radius: 8px; font-size: 13px; color: text; background: field; border-color: field_border; focus-color: accent; }
+    Button { id: "cancel_button"; background: panel; hover-background: hover; color: text; font-size: 13px; border-radius: 7px; padding: 10px; text: "Cancel"; height: 30px; onClick: { cancel(); }; }
+    Button { id: "confirm_button"; background: accent; color: on_accent; font-size: 13px; border-radius: 7px; padding: 10px; text: "Confirm"; height: 30px; onClick: { confirm(); }; }
   }
-  Label { id: "summary"; width: fill; height: 28px; padding: 5px; font-size: 12px; text: "Starting…"; color: #bdb3ce; background: #202024; }
+  Canvas { id: "status"; width: fill; height: 28px; onDraw: { draw_status(); }; }
   Timer { interval: 1000ms; onTick: {
     if ready { try { reload(""); collect_children(); } else error { say(error.message,true); } }
   }; }

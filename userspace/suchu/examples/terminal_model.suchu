@@ -34,6 +34,8 @@ fun feed(d,text) {
         command=d.escape @ textbytes.sub(text,at,1);
         if command==(esc @ "[2J") { clear(d); }
         if command==(esc @ "[H") { d.cursor=0; }
+        // Colours (SGR) stay in the line, zero-width; the view paints them.
+        if n==109 { plain(d,command); }
         d.escape="";
       } else if len(d.escape)<32 { d.escape=d.escape @ textbytes.sub(text,at,1); }
       else { d.escape=""; }

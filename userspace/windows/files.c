@@ -146,9 +146,15 @@ static int WR_WIN SetStdHandle(unsigned which,void *handle) {
 }
 static void *WR_WIN CreateFileW(const uint16_t *path,unsigned access,unsigned share,void *security,unsigned disposition,unsigned attributes,void *template) {
     if(wr_pipe_name(path))return wr_pipe_open(path,access,share,security,disposition,attributes,template);
-    /* Only the fully shared contract is available. A denied sharing mode may
-     * not become a silently permissive open. Mandatory leases are separate. */
-    if(share!=7 || security || template || (attributes&~0x40000080u) || disposition==2 || disposition==4) {
+    static unsigned traces;if(__atomic_fetch_add(&traces,1,__ATOMIC_RELAXED)<32){char line[1100]="windows-open: ";
+        if(!wr_utf8(path,line+14,sizeof(line)-16)){size_t n=wr_len(line);line[n++]='\n';line[n]=0;wr_log(line);}
+        wr_trace_contract("CreateFileW: access share disposition-attrs site",access,share,((uintptr_t)disposition<<32)|attributes,(uintptr_t)__builtin_return_address(0));}
+    /* KSW's deliberate share=READ|WRITE projection: an existing readonly file
+       is opened with native namespace protection, orchestrated by Ultra-Space.
+       This is not Windows' full symmetric sharing/DELETE-pending contract.
+       Deny-read/deny-write/exclusive modes remain explicitly unsupported. */
+    if((share!=7 && share!=3) || (share==3 && (access!=0x80000000u || disposition!=3)) ||
+       security || template || (attributes&~0x40000080u) || disposition==2 || disposition==4) {
         wr_current_teb()->last_error=50;return (void *)-1;
     }
     if(!access || (access&~0xc0000000u) || (disposition!=1 && disposition!=3 && disposition!=5)) {
@@ -158,9 +164,11 @@ static void *WR_WIN CreateFileW(const uint16_t *path,unsigned access,unsigned sh
     if(disposition==5 && !(rights&2)){wr_current_teb()->last_error=5;return (void *)-1;}
     unsigned flags=rights==3?O_RDWR:(rights==2?O_WRONLY:O_RDONLY);
     flags|=O_CLOEXEC|VEX_FS_OPEN_REGULAR;
+    if(share==3)flags|=VEX_FS_OPEN_PROTECTED;
     if(disposition==1)flags|=O_CREAT|0x80u;
     if(disposition==5)flags|=O_TRUNC;
     int fd=wr_namespace_call(VEX_FS_ROOT_OPEN,path,flags,0600,0,(rights&2) || disposition!=3);
+    if(share==3)wr_trace_contract("KSW protected open: native-result access share site",(uintptr_t)(intptr_t)fd,access,share,(uintptr_t)__builtin_return_address(0));
     wr_lock(&gate);
     void *h=fd<0?0:install(fd,rights);
     if(h)files[slot(h)].overlapped=(attributes&0x40000000u)!=0;

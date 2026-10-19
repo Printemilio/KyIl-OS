@@ -34,6 +34,7 @@
 #include <unos/spotlight.h>
 #include <unos/tls.h>
 #include <unos/tty.h>
+#include <unos/ui_theme.h>
 #include <unos/driver_manager.h>
 #include <unos/users.h>
 #include <unos/vex_abi.h>
@@ -324,6 +325,73 @@ static void print_acl_perms(uint8_t perms) {
     tty_putchar((perms & FS_ACL_EXEC) != 0u ? 'x' : '-');
 }
 
+/* help: the terminal paints these SGR colours with the system theme
+ * (35 accent, 34 blue, 2 secondary, 90 faint), so the page follows the dark
+ * and the light palette. Every name below is a real command of this shell. */
+#define HELP_ACCENT "\033[35m"
+#define HELP_BLUE "\033[34m"
+#define HELP_DIM "\033[2m"
+#define HELP_FAINT "\033[90m"
+#define HELP_RESET "\033[0m"
+
+static void help_row(const char *command, const char *what) {
+    size_t width = 0u;
+    tty_puts("    " HELP_BLUE);
+    tty_puts(command);
+    tty_puts(HELP_RESET);
+    while (command[width] != '\0') ++width;
+    for (; width < 16u; ++width) tty_putchar(' ');
+    tty_puts(HELP_DIM);
+    tty_puts(what);
+    tty_puts(HELP_RESET "\n");
+}
+
+static void help_group(const char *name, const char *commands) {
+    size_t width = 0u;
+    tty_puts("  " HELP_ACCENT);
+    tty_puts(name);
+    tty_puts(HELP_RESET);
+    while (name[width] != '\0') ++width;
+    for (; width < 12u; ++width) tty_putchar(' ');
+    tty_puts(commands);
+    tty_putchar('\n');
+}
+
+static void shell_help(void) {
+    tty_puts("\n  " HELP_ACCENT "KyIl-OS" HELP_RESET "  " HELP_DIM "help" HELP_RESET "\n");
+    tty_puts("  " HELP_FAINT "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
+             "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
+             "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
+             "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
+             "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
+             "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
+             HELP_RESET "\n\n");
+
+    tty_puts("  " HELP_FAINT "START HERE" HELP_RESET "\n");
+    help_row("sysinfo", "uptime, memory and display at a glance");
+    help_row("top", "processes and what they cost");
+    help_row("ls  cat", "list a directory, print a file");
+    help_row("theme light", "the whole system in the light palette");
+    help_row("launcher", "every application in one window");
+    tty_putchar('\n');
+
+    tty_puts("  " HELP_FAINT "ALL COMMANDS" HELP_RESET "\n");
+    help_group("system", "sysinfo  top  ps  kill  log  powerinfo  theme  cls  echo");
+    help_group("files", "ls  cat  write  rm  chmod  getfacl  setfacl  sync  spotlight");
+    help_group("apps", "launcher  gfm  browser  paint  downloads  run  suchu  inst");
+    help_group("network", "ifconfig  netstat  resolve  https  nettest");
+    help_group("users", "whoami  login  useradd  secaudit  elevatetest");
+    help_group("power", "shutdown  reboot  halt");
+    help_group("diagnose", "flowstats  fdstats  kmapstats  kmaptest  diskinfo  stress");
+    help_group("", "gputest  vktest  mousetest  guibench  guiprof  runtimetest");
+    help_group("", "persisttest  persistcheck  vexfsformat  attacktest  attackkill");
+    help_group("", "ipc_write  ipc_read");
+    tty_putchar('\n');
+
+    tty_puts("  " HELP_FAINT "\xe2\x86\x91 \xe2\x86\x93 history   \xc2\xb7   Ctrl+L clear   \xc2\xb7   "
+             "Ctrl+Shift+C copy   \xc2\xb7   PgUp PgDn scroll" HELP_RESET "\n\n");
+}
+
 static void shell_top_report(void) {
     const uint64_t total_pages = pmm_total_page_count();
     const uint64_t used_pages = pmm_used_page_count();
@@ -594,7 +662,7 @@ void shell_execute_command(const char *line) {
     }
 
     if (string_equals(line, "help")) {
-        tty_puts("commands: cls help sysinfo top flowstats ps kmapstats(reset) kmaptest kill log secaudit echo whoami useradd login diskinfo ifconfig netstat resolve https spotlight ls cat write rm chmod getfacl setfacl ipc_write ipc_read inst(info/translate/install/remove) gfm browser downloads(cancel) fdstats nettest gputest vktest mousetest elevatetest attacktest attackkill run suchu sync shutdown reboot powerinfo vexfsformat persisttest persistcheck runtimetest guibench guiprof halt\n");
+        shell_help();
         return;
     }
 
@@ -637,6 +705,20 @@ void shell_execute_command(const char *line) {
 
     if (string_equals(line, "top")) {
         shell_top_report();
+        return;
+    }
+    /* theme [dark|light|toggle]: the system palette (also on the desktop
+       menu). Applications follow through /etc/kyil/theme.conf. */
+    if (string_equals(line, "theme") || string_equals(line, "theme dark") ||
+        string_equals(line, "theme light") || string_equals(line, "theme toggle")) {
+        int mode = ui_theme_mode();
+        if (string_equals(line, "theme dark")) mode = UI_THEME_DARK;
+        else if (string_equals(line, "theme light")) mode = UI_THEME_LIGHT;
+        else if (string_equals(line, "theme toggle")) mode = mode == UI_THEME_DARK ? UI_THEME_LIGHT : UI_THEME_DARK;
+        if (!string_equals(line, "theme")) (void)gui_set_theme(mode);
+        tty_puts("theme: ");
+        tty_puts(ui_theme()->name);
+        tty_puts(" (theme dark | theme light | theme toggle)\n");
         return;
     }
     if (string_equals(line, "flowstats")) {

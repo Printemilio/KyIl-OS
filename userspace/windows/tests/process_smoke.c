@@ -82,7 +82,7 @@ void mainCRTStartup(void) {
         uint16_t env[]=L"KYIL_CHILD_VALUE=real\0";
         uint64_t attribute_storage[8]={0};uint64_t attribute_bytes=0;
         struct {startup basic;void *attributes;} extended={io,attribute_storage};
-        void *selection[2]={in_read,out_write};startup *selected_startup=&io;unsigned creation=4|0x40000;
+        void *selection[2]={in_read,out_write};startup *selected_startup=&io;unsigned creation=4|0x400;
         if(cycle==2) {
             check(!InitializeProcThreadAttributeList(0,1,0,&attribute_bytes) && attribute_bytes && attribute_bytes<=sizeof(attribute_storage) && GetLastError()==122,"process: attribute sizing FAIL\n");
             attribute_bytes=sizeof(attribute_storage);check(InitializeProcThreadAttributeList(attribute_storage,1,0,&attribute_bytes),"process: attribute list init FAIL\n");
@@ -98,7 +98,7 @@ void mainCRTStartup(void) {
         if(cycle==3) {
             char ansi_command[]="\"A:\\windows-process-child.exe\" --test \"two words\"";
             char ansi_env[]="KYIL_CHILD_VALUE=real\0";
-            created=CreateProcessA("A:\\windows-process-child.exe",ansi_command,0,0,1,creation&~0x40000u,ansi_env,0,selected_startup,&child);
+            created=CreateProcessA("A:\\windows-process-child.exe",ansi_command,0,0,1,creation&~0x400u,ansi_env,0,selected_startup,&child);
         }else
 #endif
         created=CreateProcessW(CHILD,cmd,0,0,1,creation,env,0,selected_startup,&child);

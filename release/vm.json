@@ -1,7 +1,7 @@
 {
-  "tag": "v2026.10.18",
-  "asset": "KyIlOS-2026.10.18-vm.zip",
-  "bytes": 830644193,
-  "sha256": "C241F9D148EA7DA799956DC3BDA130F846793A1F3C79E14BEEFF9EE206B487B0",
-  "url": "https://github.com/Printemilio/KyIl-OS/releases/download/v2026.10.18/KyIlOS-2026.10.18-vm.zip"
+  "tag": "v0.29.2",
+  "asset": "KyIlOS-v0.29.2-vm.zip",
+  "bytes": 479905492,
+  "sha256": "4B7BFA0F749C9C54EEA11ACA8D194AC6F6D5CD950CCC393671D551E09028A82C",
+  "url": "https://github.com/Printemilio/KyIl-OS/releases/download/v0.29.2/KyIlOS-v0.29.2-vm.zip"
 }

@@ -11,6 +11,7 @@
 #include <unos/gui.h>
 #include <unos/scheduler.h>
 #include <unos/keyboard.h>
+#include <unos/ui_theme.h>
 
 #define APP_SURFACE_MAX 8u
 #define APP_SURFACE_MARGIN 18ull
@@ -382,6 +383,16 @@ app_surface_t *app_surface_find(uint32_t window_id) {
     return app_surface_find_slot(window_id, 0u);
 }
 
+/* Display name of the focused window for the top bar ("KyIl Files" -> "Files"). */
+const char *app_surface_focused_name(void) {
+    app_surface_t *surface = app_surface_find(app_surface_focused_window_id);
+    if (surface == NULL || !surface->visible || surface->minimized || surface->close_pending) {
+        return NULL;
+    }
+    return strncmp(surface->title, "KyIl ", 5) == 0 ? surface->title + 5 : surface->title;
+}
+
+
 static void app_surface_focus_next(void) {
     app_surface_t *next=NULL;
     for(uint32_t i=0;i<APP_SURFACE_MAX;++i) {
@@ -559,6 +570,14 @@ int app_surface_notify(uint32_t owner,uint32_t id,uint32_t tag) {
     }
     vex_app_window_event_t event={.type=VEX_APP_EVENT_NOTIFY,.flags=tag};
     return app_surface_queue_event(surface,&event);
+}
+void app_surface_notify_all(uint32_t tag) {
+    GUI_GUARD;
+    for(uint32_t i=0;i<APP_SURFACE_MAX;i++) {
+        app_surface_t *surface=&app_surfaces[i];
+        if(surface->window_id && !surface->close_pending)
+            (void)app_surface_notify(surface->owner_pid,surface->window_id,tag);
+    }
 }
 
 void app_surface_blur(void) {
@@ -939,6 +958,8 @@ void app_surface_send_raw_pointer(uint64_t x, uint64_t y, uint32_t buttons, int 
 static void app_surface_render_selected(uint32_t selected, const vex_rect_t *clip) {
     uint64_t last_z = 0u;
 
+    vex_lvgl_ui_set_active_window(app_surface_focused_window_id);
+
     for (;;) {
         app_surface_t *surface = NULL;
         uint64_t content_x;
@@ -973,25 +994,20 @@ static void app_surface_render_selected(uint32_t selected, const vex_rect_t *cli
                                           (uint32_t)surface->w, (uint32_t)surface->h,
                                           chrome_title);
         } else {
+            /* Same chrome as the LVGL renderer: theme window colour, divider,
+               no title text (the Figma frames leave the bar to the app). */
             gui_fill_rounded_rect(surface->x, surface->y, surface->w, surface->h, 10u,
-                                  gui_color_rgb(20u, 20u, 20u));
+                                  gui_theme_color(ui_theme()->window));
             gui_fill_rect(surface->x + 1u, surface->y + APP_SURFACE_TITLE_H,
                           surface->w > 2u ? surface->w - 2u : surface->w, 1u,
-                          gui_color_rgb(72u, 49u, 86u));
-            gui_font_text_clipped(surface->x + 23u,
-                                  surface->y + (APP_SURFACE_TITLE_H - gui_font_cell_height(16u)) / 2u,
-                                  chrome_title, gui_color_rgb(255u, 255u, 255u), 16u,
-                                  surface->w > 130u ? surface->w - 130u : 8u);
+                          gui_theme_color(ui_theme()->divider));
+            (void)chrome_title;
         }
         if (!vex_lvgl_ui_ready() && surface->w >= 100u) {
             const uint64_t cy = surface->y + APP_SURFACE_TITLE_H / 2u;
-            const uint32_t close_col = gui_color_rgb(255u, 69u, 72u);
-            const uint32_t min_col = surface->minimized
-                ? gui_color_rgb(122u, 116u, 64u)
-                : gui_color_rgb(244u, 205u, 50u);
-            const uint32_t max_col = surface->maximized
-                ? gui_color_rgb(58u, 128u, 76u)
-                : gui_color_rgb(40u, 213u, 94u);
+            const uint32_t close_col = gui_theme_color(ui_theme()->control_close);
+            const uint32_t min_col = gui_theme_color(ui_theme()->control_minimize);
+            const uint32_t max_col = gui_theme_color(ui_theme()->control_maximize);
 
             gui_fill_circle(surface->x + surface->w - 74u, cy,
                             APP_SURFACE_CONTROL_RADIUS, min_col);

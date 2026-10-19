@@ -94,9 +94,15 @@ static int format(unsigned locale,unsigned flags,const calendar_time *provided,c
 }
 static int WR_WIN GetDateFormatW(unsigned l,unsigned f,const calendar_time *t,const uint16_t *p,uint16_t *o,int n){return format(l,f,t,p,o,n,1);}
 static int WR_WIN GetTimeFormatW(unsigned l,unsigned f,const calendar_time *t,const uint16_t *p,uint16_t *o,int n){return format(l,f,t,p,o,n,0);}
+static unsigned named_locale(const uint16_t *name){unsigned (WR_WIN *id)(const uint16_t *,unsigned)=wr_nls_exports("LocaleNameToLCID");return id(name,0);}
+static int WR_WIN GetDateFormatEx(const uint16_t *l,unsigned f,const calendar_time *t,const uint16_t *p,uint16_t *o,int n,const uint16_t *calendar){
+    if(calendar)return error(87);unsigned id=named_locale(l);return id?GetDateFormatW(id,f,t,p,o,n):0;
+}
+static int WR_WIN GetTimeFormatEx(const uint16_t *l,unsigned f,const calendar_time *t,const uint16_t *p,uint16_t *o,int n){unsigned id=named_locale(l);return id?GetTimeFormatW(id,f,t,p,o,n):0;}
 void *wr_calendar_exports(const char *name) {
 #define E(f) if(wr_equal(name,#f,0))return (void *)&f
     E(SystemTimeToFileTime);E(GetTimeZoneInformation);E(SystemTimeToTzSpecificLocalTime);E(GetLocalTime);E(GetDateFormatW);E(GetTimeFormatW);
+    E(GetDateFormatEx);E(GetTimeFormatEx);
 #undef E
     return 0;
 }

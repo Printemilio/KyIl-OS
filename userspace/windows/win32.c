@@ -169,6 +169,13 @@ static int WR_WIN WriteProcessMemory(void *process,void *address,const void *inp
 static int WR_WIN VirtualProtectEx(void *process,void *address,size_t length,unsigned protect,unsigned *old) {
     if(!wr_process_self_access(process,8))return 0;return VirtualProtect(address,length,protect,old);
 }
+#include "generated_provider_ordinals.h"
+const char *wr_provider_ordinal_name(const char *dll,unsigned ordinal){
+    for(unsigned i=0;i<sizeof(provider_ordinals)/sizeof(provider_ordinals[0]);i++)
+        if(provider_ordinals[i].ordinal==ordinal && wr_equal(provider_ordinals[i].dll,dll,1))return provider_ordinals[i].name;
+    return 0;
+}
+void *wr_builtin_ordinal(const char *dll,unsigned ordinal){const char *name=wr_provider_ordinal_name(dll,ordinal);return name?wr_builtin(dll,name):0;}
 void *wr_builtin(const char *dll,const char *name) {
     const char *host=wr_api_set_host(dll);if(host)dll=host;
     if(wr_equal(dll,"kyilwin-provider.dll",1)) {
@@ -178,14 +185,21 @@ void *wr_builtin(const char *dll,const char *name) {
         return wr_builtin(module_name,name+i+1);
     }
     if(wr_equal(dll,"bcryptprimitives.dll",1))return wr_cfg_register(wr_rng_exports(name));
+    if(wr_equal(dll,"ws2_32.dll",1)){
+        if(name[0]=='#'){unsigned ordinal=0,i=1;for(;name[i];i++){if(name[i]<'0' || name[i]>'9' || ordinal>(65535u-(name[i]-'0'))/10u)return 0;ordinal=ordinal*10u+(name[i]-'0');}return i>1?wr_builtin_ordinal(dll,ordinal):0;}
+        return wr_cfg_register(wr_winsock_exports(name));
+    }
     if(wr_equal(dll,"winmm.dll",1))return wr_cfg_register(wr_multimedia_exports(name));
     if(wr_equal(dll,"shell32.dll",1))return wr_cfg_register(wr_shell_exports(name));
+    if(wr_equal(dll,"user32.dll",1))return wr_cfg_register(wr_user_exports(name));
     if(wr_equal(dll,"advapi32.dll",1))return wr_cfg_register(wr_advapi_exports(name));
     if(wr_equal(dll,"ntdll.dll",1)) {
+        if(wr_equal(name,"GuardCheckLongJumpTarget",0))return 0; /* Kernel32/KernelBase contract */
         void *p=wr_heap_exports(name);if(!p)p=wr_exception_exports(name);if(!p)p=wr_nt_core_exports(name);return wr_cfg_register(p);
     }
     if(wr_equal(dll,"version.dll",1))return wr_cfg_register(wr_version_exports(name));
     if(!wr_equal(dll,"kernel32.dll",1) && !wr_equal(dll,"kernelbase.dll",1)) return 0;
+    void *base=wr_base_exports(name);if(base)return wr_cfg_register(base);
     void *proc=wr_wer_exports(name);if(proc)return wr_cfg_register(proc);
     proc=wr_process_exports(name);if(proc)return wr_cfg_register(proc);
     proc=wr_environment_exports(name);if(proc)return wr_cfg_register(proc);

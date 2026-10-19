@@ -64,6 +64,33 @@ static unsigned WR_WIN ExpandEnvironmentStringsW(const uint16_t *source,uint16_t
     }
     if(out && total<cap)out[total]=0;wr_environment_lock(0);return (unsigned)total+1;
 }
+int wr_environment_defaults(void){
+    uint16_t profile[512],local[512],roaming[512],system[512],temp[512];
+    if(wr_profile_folder(0x28,profile,512) || wr_profile_folder(0x1c,local,512) ||
+       wr_profile_folder(0x1a,roaming,512) || wr_profile_folder(0x24,system,512))return -1;
+    unsigned n=length(profile);if(n+6>=512)return -1;memcpy(temp,profile,n*2);
+    const uint16_t suffix[]={'\\','T','e','m','p',0};memcpy(temp+n,suffix,sizeof(suffix));
+    const struct {const char *name;const uint16_t *value;} defaults[]={
+        {"USERPROFILE",profile},{"LOCALAPPDATA",local},{"APPDATA",roaming},
+        {"TEMP",temp},{"TMP",temp},{"SystemRoot",system},{"windir",system},
+        {"USERNAME",profile+9},{"HOMEPATH",profile+2}};
+    /* Names are matched with the same case-insensitive rules as the public
+       environment APIs. Existing entries, including empty entries, win. */
+    for(unsigned i=0;i<sizeof(defaults)/sizeof(*defaults);i++){
+        uint16_t name[32];int count=wr_utf16(defaults[i].name,name,32);if(count<0)return -1;
+        int present=0;const uint16_t *block=wr_environment_block();
+        for(const uint16_t *s=block;*s;s+=length(s)+1)if(key(s,name,(unsigned)count)){present=1;break;}
+        if(!present && !SetEnvironmentVariableW(name,defaults[i].value))return -1;
+    }
+    const uint16_t drive[]={'C',':',0};
+    const uint16_t names[][12]={{'H','O','M','E','D','R','I','V','E',0},{'S','y','s','t','e','m','D','r','i','v','e',0}};
+    for(unsigned i=0;i<2;i++){
+        unsigned count=length(names[i]);int present=0;
+        for(const uint16_t *s=wr_environment_block();*s;s+=length(s)+1)if(key(s,names[i],count)){present=1;break;}
+        if(!present && !SetEnvironmentVariableW(names[i],drive))return -1;
+    }
+    return 0;
+}
 void *wr_environment_exports(const char *name) {
 #define E(f) if(wr_equal(name,#f,0))return (void *)&f
     E(GetEnvironmentVariableW);E(GetEnvironmentStringsW);E(FreeEnvironmentStringsW);E(SetEnvironmentVariableW);E(ExpandEnvironmentStringsW);

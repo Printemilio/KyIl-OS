@@ -13,6 +13,7 @@ static int wer_host;
 /* Userspace DLL policy; known native providers remain protected. The optional
    USER_DIRS list is empty until AddDllDirectory is implemented. */
 static unsigned default_search=0xa00u,active_search;
+static const char *active_directory;
 static const char *error;
 unsigned wr_modules_count(void) {return module_count;}
 module *wr_module_at(unsigned i) {return i<module_count?&modules[i]:0;}
@@ -55,7 +56,7 @@ static module *load_source(const char *,int,int);
 static module *load_opened(const char *path,int fd){module *m=load_source(path,1,fd);vex_syscall1(VEX_SYS_CLOSE,(uintptr_t)fd);return m;}
 static int open_image(const char *path){return wr_namespace_open_native(path,O_RDONLY|O_CLOEXEC|VEX_FS_OPEN_REGULAR|VEX_FS_OPEN_EXECUTABLE);}
 int wr_native_module_name(const char *name) {
-    return wr_api_set_host(name) || wr_equal(name,"shell32.dll",1) || wr_equal(name,"advapi32.dll",1) || wr_equal(name,"winmm.dll",1) || wr_equal(name,"bcryptprimitives.dll",1) || wr_equal(name,"kernel32.dll",1) || wr_equal(name,"kernelbase.dll",1) || wr_equal(name,"ntdll.dll",1) || wr_equal(name,"version.dll",1);
+    return wr_api_set_host(name) || wr_equal(name,"ws2_32.dll",1) || wr_equal(name,"user32.dll",1) || wr_equal(name,"shell32.dll",1) || wr_equal(name,"advapi32.dll",1) || wr_equal(name,"winmm.dll",1) || wr_equal(name,"bcryptprimitives.dll",1) || wr_equal(name,"kernel32.dll",1) || wr_equal(name,"kernelbase.dll",1) || wr_equal(name,"ntdll.dll",1) || wr_equal(name,"version.dll",1);
 }
 static module *dependency(module *parent,const char *name) {
     const char *host=wr_api_set_host(name);if(host)name=host;
@@ -72,10 +73,11 @@ static module *dependency(module *parent,const char *name) {
     if(search&0x1000u)search|=0xe00u;
     if(search&0x200u){
         module *exe=module_count?&modules[0]:parent;
-        char path[512];size_t slash=0,n=wr_len(exe->path),len=wr_len(name);
-        for(size_t i=0;i<n;i++)if(exe->path[i]=='/')slash=i+1;
+        const char *source=active_directory?active_directory:exe->path;
+        char path[512];size_t slash=0,n=wr_len(source),len=wr_len(name);
+        for(size_t i=0;i<n;i++)if(source[i]=='/')slash=i+1;
         if(slash+len>=sizeof(path)){fail("dependency path too long");return 0;}
-        memcpy(path,exe->path,slash);memcpy(path+slash,name,len+1);
+        memcpy(path,source,slash);memcpy(path+slash,name,len+1);
         int fd=open_image(path);if(fd>=0)return load_opened(path,fd);
         if(fd!=-2){fail("application DLL open denied/failed");return 0;}
     }
@@ -91,6 +93,10 @@ static module *dependency(module *parent,const char *name) {
 }
 static void *symbol(module *m,const char *name,uint32_t ordinal,unsigned depth) {
     if(depth>16) {fail("export forwarder cycle/depth");return 0;}
+    if(!name && wr_native_module_name(m->name)){
+        name=wr_provider_ordinal_name(m->name,ordinal);
+        if(!name){fail("native provider ordinal not implemented");return 0;}
+    }
     uint32_t r=m->image.dirs[0][0], n=m->image.dirs[0][1];
     if(!r || n<40) {fail("missing DLL export directory");return 0;}
     const uint8_t *e=m->base+r;
@@ -148,7 +154,7 @@ static int imports(module *m) {
             } else {
                 if(!pe_span(v,3,m->image.size) || !(name=image_string(m,v+2))) {fail("invalid import name");return -1;}
             }
-            void *address=name?wr_builtin(dll,name):0;
+            void *address=name?wr_builtin(dll,name):wr_builtin_ordinal(dll,ord);
             if(!address) {
                 /* Builtin modules fail by exact symbol instead of guessing a stub. */
                 if(wr_native_module_name(dll)) {
@@ -159,7 +165,8 @@ static int imports(module *m) {
                     continue;
                 }
                 module *dep=dependency(m,dll);
-                if(!dep || !(address=symbol(dep,name,ord,0)))return -1;
+                if(!dep){wr_log("windows: missing dependency ");wr_log(dll);wr_log(" caller=");wr_log(m->name);wr_log(" reason=");wr_log(error?error:"unknown");wr_log("\n");return -1;}
+                if(!(address=symbol(dep,name,ord,0)))return -1;
             }
             pe_put64(m->base+dst+k,(uintptr_t)address);
         }
@@ -227,6 +234,8 @@ static module *load_source(const char *path,int expect_dll,int source_fd) {
     if(why) {fail(why);goto out;}
     if(wr_tls_describe(m)) {fail("invalid PE static TLS directory");goto out;}
     why=wr_load_config(m);if(why) {fail(why);goto out;}
+    if(m->longjump_count)wr_trace_contract("PE longjmp catalog: count stride source-rva image",m->longjump_count,m->guard_stride,
+        pe_u64(m->base+m->image.dirs[10][0]+0xb0)-(uintptr_t)m->base,(uintptr_t)m->base);
     why=validate_delay_imports(m);if(why) {fail(why);goto out;}
     wr_unmap(file,size);file=0;
     m->state=1;m->references=1;m->pinned=wr_native_module_name(m->name);unsigned index=module_count++;
@@ -235,6 +244,7 @@ static module *load_source(const char *path,int expect_dll,int source_fd) {
     return m;
 out:
     if(file)wr_unmap(file,size);
+    wr_load_config_release(m);
     if(m->base)wr_unmap(m->base,m->image.size);
     m->base=0;return 0;
 }
@@ -251,7 +261,7 @@ static void cleanup(void) {
         }
     }
     for(unsigned i=module_count;i>0;i--) {
-        module *m=&modules[i-1];if(m->base)wr_unmap(m->base,m->image.size);
+        module *m=&modules[i-1];wr_load_config_release(m);if(m->base)wr_unmap(m->base,m->image.size);
     }
 }
 static int protect_module(module *m) {
@@ -271,16 +281,17 @@ static module *module_named(const char *name) {
 static module *load_dynamic_flags(const char *name,unsigned flags) {
     module *existing=module_named(name);if(existing){if(existing->references==UINT32_MAX)return 0;existing->references++;return existing;}
     unsigned before=module_count,order=init_count,entered=0;module *m;unsigned saved_search=active_search;
-    active_search=flags?flags:default_search;
+    const char *saved_directory=active_directory;char altered_path[1024];
+    active_search=flags==8?0xa00u:(flags?flags:default_search);active_directory=NULL;
     if(dll_name(name))m=dependency(&modules[0],name);
     else {
         uint16_t wide[1024];char path[1024];m=0;
         if(wr_utf16(name,wide,1024)>=0){
             int fd=wr_namespace_image(wide,0,0,path,sizeof(path));
-            if(fd>=0)m=load_opened(path,fd);
+            if(fd>=0){if(flags==8){memcpy(altered_path,path,wr_len(path)+1);active_directory=altered_path;}m=load_opened(path,fd);}
         }
     }
-    active_search=saved_search;
+    active_search=saved_search;active_directory=saved_directory;
     if(!m)goto rollback;
     /* Static TLS for dynamically loaded modules needs all-thread initialization.
        Refuse it until that protocol exists; don't publish half-valid TLS. */
@@ -298,7 +309,7 @@ static module *load_dynamic_flags(const char *name,unsigned flags) {
     return m;
 rollback:
     if(!entered) {
-        for(unsigned i=module_count;i>before;i--){module *dead=&modules[i-1];wr_module_unlink(dead);if(dead->base)wr_unmap(dead->base,dead->image.size);memset(dead,0,sizeof(*dead));}
+        for(unsigned i=module_count;i>before;i--){module *dead=&modules[i-1];wr_module_unlink(dead);wr_load_config_release(dead);if(dead->base)wr_unmap(dead->base,dead->image.size);memset(dead,0,sizeof(*dead));}
         module_count=before;init_count=order;return 0;
     }
     /* If a constructor entered the graph, its loader links/callback state are
@@ -337,10 +348,14 @@ static void *WR_WIN GetProcAddress(void *handle,const char *name) {
 static void *WR_WIN LoadLibraryExA(const char *name,void *file,unsigned flags) {
     static unsigned calls;unsigned trace=__atomic_fetch_add(&calls,1,__ATOMIC_RELAXED)<64;
     if(trace){wr_log("windows-dynamic: LoadLibraryEx name=");wr_log(name?name:"NULL");wr_log(" flags=");log_hex(flags);wr_log(" caller=");log_hex((uintptr_t)__builtin_return_address(0));wr_log("\n");}
-    if(!name || file || (flags&~0x1e00u)){wr_current_teb()->last_error=flags?50:87;
+    if(!name || file || (flags&~0x1e08u) || ((flags&8) && flags!=8)){wr_current_teb()->last_error=file || ((flags&8) && flags!=8)?87:(flags?50:87);
         if(trace)wr_log("windows-dynamic: LoadLibraryEx rejected arguments/flags\n");return 0;}
     char normalized[1024];if(library_name(name,normalized)){wr_current_teb()->last_error=87;return 0;}name=normalized;
-    wr_loader_lock();module *m=load_dynamic_flags(name,flags);wr_loader_unlock();if(!m)wr_current_teb()->last_error=126;
+    /* Windows only defines ALTERED_SEARCH_PATH for a fully qualified path.
+       The actual open remains atomic under the existing native root cap. */
+    if(flags==8 && !(name[0] && name[1]==':' && (name[2]=='\\' || name[2]=='/'))){wr_current_teb()->last_error=87;return NULL;}
+    wr_loader_lock();error=NULL;module *m=load_dynamic_flags(name,flags);const char *reason=error;wr_loader_unlock();if(!m)wr_current_teb()->last_error=126;
+    if(trace && !m && reason){wr_log("windows-dynamic: load reason=");wr_log(reason);wr_log("\n");}
     if(trace){wr_log("windows-dynamic: LoadLibraryEx result=");log_hex(m?(uintptr_t)m->base:0);wr_log(" error=");log_hex(m?0:wr_current_teb()->last_error);wr_log("\n");}
     return m?m->base:0;
 }
@@ -356,17 +371,16 @@ static int WR_WIN FreeLibrary(void *handle) {
     else why=50; /* Graph/TLS-safe dynamic unloading is not a no-op success. */
     wr_loader_unlock();if(why)wr_current_teb()->last_error=why;return !why;
 }
-static int guest_module_path(module *m,uint16_t *out,size_t cap) {
+int wr_module_guest_path(module *m,uint16_t *out,size_t cap) {
     if(m==&modules[0])return wr_utf16(wr_guest_image(),out,cap);
     if(wr_native_module_name(m->name)) {
         char system[512]="C:\\Windows\\System32\\";size_t n=wr_len(system),len=wr_len(m->name);if(n+len>=sizeof(system))return -1;memcpy(system+n,m->name,len+1);return wr_utf16(system,out,cap);
     }
-    char path[512];size_t n=wr_len(wr_guest_image()),slash=0;for(size_t i=0;i<n;i++)if(wr_guest_image()[i]=='\\' || wr_guest_image()[i]=='/')slash=i+1;
-    size_t name=wr_len(m->name);if(slash+name>=sizeof(path))return -1;memcpy(path,wr_guest_image(),slash);memcpy(path+slash,m->name,name+1);return wr_utf16(path,out,cap);
+    return wr_namespace_project_path(m->path,out,cap);
 }
 static unsigned WR_WIN GetModuleFileNameW(void *handle,uint16_t *out,unsigned capacity) {
     if(!out || !capacity){wr_current_teb()->last_error=87;return 0;}
-    wr_loader_lock();module *m=handle?module_handle(handle):&modules[0];uint16_t name[512];int n=m?guest_module_path(m,name,512):-1;
+    wr_loader_lock();module *m=handle?module_handle(handle):&modules[0];uint16_t name[512];int n=m?wr_module_guest_path(m,name,512):-1;
     wr_loader_unlock();if(n<0){wr_current_teb()->last_error=6;return 0;}
     unsigned copy=(unsigned)n<capacity?(unsigned)n:capacity-1;memcpy(out,name,copy*2);out[copy]=0;
     if((unsigned)n>=capacity){wr_current_teb()->last_error=122;return capacity;}return (unsigned)n;

@@ -257,6 +257,7 @@ static unsigned WR_WIN WaitForMultipleObjects(unsigned count,const void *input,i
     if(error || result==UINT32_MAX)wr_current_teb()->last_error=error?error:8;return result;
 }
 static int WR_WIN CloseHandle(void *h) {
+    int token=wr_token_close(h);if(token>=0)return token;
     int snapshot=wr_wer_thread_close(h);if(snapshot>=0)return snapshot;
     int job=wr_job_close(h);if(job>=0)return job;
     int registry=wr_registry_close(h);if(registry>=0)return registry;

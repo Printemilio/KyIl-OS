@@ -1386,6 +1386,9 @@ int fs_write(const char *path, void *data, size_t size) {
     if(fs_root_path_pinned(normalized) || !fs_root_scope_allows(normalized,FS_ROOT_WRITE))return -1;
     entry = find_entry(normalized);
     if(!entry && !fs_root_scope_allows(normalized,FS_ROOT_CREATE))return -1;
+    /* A regular-file overlay must not shadow an existing directory and thus
+       hide protected descendants (including implicit ISO directories). */
+    if(!entry && fs_directory_exists(normalized))return -1;
     if (!userspace_path_allowed(normalized) ||
         (entry != NULL && !entry_allows_access(entry, 0, 1, 0)) ||
         (entry == NULL && scheduler_current_user_mode() != 0u &&
@@ -1415,6 +1418,8 @@ int fs_write(const char *path, void *data, size_t size) {
         return write_entry_data_unchecked(honeypot_path, data, size);
     }
 
+    uint64_t watched_identity=overwrites?fs_file_identity(normalized):0;
+    if(overwrites && !watched_identity)return -1;
     if (write_entry_data_unchecked(normalized, data, size) != 0) {
         return -1;
     }
@@ -1423,7 +1428,7 @@ int fs_write(const char *path, void *data, size_t size) {
         return 0;
     }
     mrac_decision = security_mrac_record_write(scheduler_current_pid(), scheduler_current_uid(),
-                                               scheduler_current_capabilities(), normalized, size);
+                                               scheduler_current_capabilities(), normalized, size, watched_identity);
     if (mrac_decision == SECURITY_MRAC_QUARANTINE) {
         return -1;
     }
@@ -1589,7 +1594,7 @@ int fs_delete(const char *path) {
         return -1;
     }
 
-    if(fs_root_path_pinned(normalized) || !fs_root_scope_allows(normalized,FS_ROOT_REMOVE))return -1;
+    if(fs_root_path_pinned(normalized) || !fs_namespace_mutation_allowed(normalized) || !fs_root_scope_allows(normalized,FS_ROOT_REMOVE))return -1;
     entry = find_entry(normalized);
     if (entry == NULL) {
         return -1;
@@ -1640,7 +1645,7 @@ int fs_delete_prefix(const char *prefix) {
         return -1;
     }
 
-    if(fs_root_path_pinned(normalized) || !fs_root_scope_allows(normalized,FS_ROOT_REMOVE))return -1;
+    if(fs_root_path_pinned(normalized) || !fs_namespace_mutation_allowed(normalized) || !fs_root_scope_allows(normalized,FS_ROOT_REMOVE))return -1;
     for (uint32_t i = 0; i < fs_entry_capacity; ++i) {
         if (!fs_entries[i].used || !path_prefix_matches(fs_entries[i].path, normalized)) {
             continue;
@@ -1806,7 +1811,8 @@ static int fs_move_internal(const char *old_path, const char *new_path, int repl
     if (string_equals(old_normalized, new_normalized)) {
         return 0;
     }
-    if(fs_root_path_pinned(old_normalized) || fs_root_path_pinned(new_normalized) ||
+    if(!fs_namespace_mutation_allowed(old_normalized) || !fs_namespace_mutation_allowed(new_normalized) ||
+       fs_root_path_pinned(old_normalized) || fs_root_path_pinned(new_normalized) ||
        !fs_root_scope_allows(old_normalized,FS_ROOT_RENAME) || !fs_root_scope_allows(new_normalized,FS_ROOT_RENAME))return -1;
     if (find_boot_module_entry(old_normalized) != NULL || find_boot_module_entry(new_normalized) != NULL) {
         return -1;
@@ -1903,7 +1909,7 @@ int fs_replace_preserve(const char *source,const char *destination,const char *b
     const char *names[3]={source,destination,backup};
     fs_disk_entry_t *entries[3]={0};
     for(unsigned i=0;i<3;i++)if(names[i]) {
-        if(fs_root_path_pinned(names[i]) || !fs_root_scope_allows(names[i],FS_ROOT_RENAME|FS_ROOT_WRITE))return -13;
+        if(!fs_namespace_mutation_allowed(names[i]) || fs_root_path_pinned(names[i]) || !fs_root_scope_allows(names[i],FS_ROOT_RENAME|FS_ROOT_WRITE))return -13;
         if(find_boot_module_entry(names[i]))return -30;
         entries[i]=find_entry(names[i]);
         if(!entries[i]){if(i<2)return -2;if(fs_directory_exists(names[i]))return -21;continue;}
@@ -2024,6 +2030,48 @@ int fs_is_protected(const char *path) {
     return path_prefix_matches(normalized, "/sys");
 }
 
+/* Same namespace transaction as open/delete/rename. No process-local policy
+ * or broker lookup can bypass this native authority. Separate from /sys read
+ * restrictions: protected names still permit ordinary authorized reads/writes.
+ * One guard is owned by an open description, whose existing refs include DUP,
+ * inherited FDs, queued IPC and lazy mappings. No PID controls its lifetime. */
+struct fs_name_protection {struct fs_name_protection *next;char path[FS_MAX_PATH];};
+static fs_name_protection_t *name_protections;
+static unsigned name_protection_count;
+fs_name_protection_t *fs_name_protect(const char *path,int *error) {
+    KERNEL_GUARD(fs_gate);char canonical[FS_MAX_PATH];fs_metadata_t metadata;
+    *error=-13;
+    if(fs_resolve_path(path,canonical,sizeof(canonical)) ||
+       !fs_root_scope_allows(canonical,FS_ROOT_READ))return NULL;
+    *error=-2;if(fs_get_metadata(canonical,&metadata,1))return NULL;
+    *error=-95;if(metadata.type!=FS_ENTRY_REGULAR)return NULL;
+    *error=-13;if(fs_access_path(canonical,1,0,0,1))return NULL;
+    *error=-12;if(name_protection_count>=4096)return NULL;
+    fs_name_protection_t *p=kmalloc(sizeof(*p));if(!p)return NULL;
+    copy_path(p->path,canonical);p->next=name_protections;name_protections=p;++name_protection_count;
+    *error=0;return p;
+}
+void fs_name_protection_release(fs_name_protection_t *p) {
+    if(!p)return;KERNEL_GUARD(fs_gate);
+    fs_name_protection_t **link=&name_protections;while(*link && *link!=p)link=&(*link)->next;
+    if(*link){*link=p->next;--name_protection_count;kfree(p);}
+}
+int fs_namespace_mutation_allowed(const char *path) {
+    KERNEL_GUARD(fs_gate);char normalized[FS_MAX_PATH];
+    if(!path || !normalize_absolute_path(path,normalized))return 0;
+    /* Directory markers represent their containing directory. Removing its
+       marker must not evade the same ancestor protection as rename(dir). */
+    size_t n=strlen(normalized);const char *marker="/.ladybird_dir";size_t suffix=strlen(marker);
+    if(n>=suffix && !strcmp(normalized+n-suffix,marker))normalized[n-suffix]=0;
+    if(!scheduler_current_user_mode() ||
+       (fs_root_credential_caps(scheduler_current_capabilities())&VEX_CAP_FS_ADMIN))return 1;
+    for(fs_name_protection_t *p=name_protections;p;p=p->next)if(path_prefix_matches(p->path,normalized)) {
+        security_audit_log_event("fs-protect-deny",normalized,scheduler_current_pid(),scheduler_current_uid(),scheduler_current_capabilities(),0);
+        return 0;
+    }
+    return 1;
+}
+
 uint64_t fs_file_identity(const char *path) {
     KERNEL_GUARD(fs_gate);char normalized[FS_MAX_PATH],resolved[FS_MAX_PATH];
     if(!path || !normalize_absolute_path(path,normalized) || !resolve_normalized_path_internal(normalized,resolved,1) ||
@@ -2051,6 +2099,15 @@ int fs_get_metadata(const char *path, fs_metadata_t *out, uint8_t follow_links) 
     if(!fs_root_scope_allows(follow_links?resolved:normalized,0))return -1;
     entry = find_entry(follow_links != 0u ? resolved : normalized);
     if (entry == NULL) {
+        /* Portable/USB boot has an ORA archive without any ISO block device.
+           Its resident regular-file catalog is just as real as disk entries.
+           Keep writable overlays first, and report the archive's read-only
+           backing without materializing/copying its contents. */
+        if(find_boot_module_entry(resolved)) {
+            out->uid=0u;out->gid=0u;out->mode=0444u;
+            out->type=FS_ENTRY_REGULAR;out->protected_path=fs_is_protected(resolved)!=0;
+            return 0;
+        }
         if (iso9660_exists(resolved)) {
             out->uid = 0u;
             out->gid = 0u;
@@ -2178,7 +2235,7 @@ int fs_symlink(const char *target, const char *link_path) {
         !normalize_absolute_path(link_path, normalized)) {
         return -1;
     }
-    if(fs_root_path_pinned(normalized) || !fs_root_scope_allows(normalized,FS_ROOT_CREATE))return -1;
+    if(fs_root_path_pinned(normalized) || !fs_namespace_mutation_allowed(normalized) || !fs_root_scope_allows(normalized,FS_ROOT_CREATE))return -1;
     if (find_entry(normalized) != NULL || find_boot_module_entry(normalized) != NULL) {
         return -1;
     }

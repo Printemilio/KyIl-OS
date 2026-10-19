@@ -37,7 +37,7 @@ uint32_t security_default_caps_for_admin(uint8_t is_admin);
 const char *security_cap_primary_name(uint32_t caps);
 void security_audit_log_event(const char *action, const char *target, uint32_t pid, uint32_t uid, uint32_t caps, uint8_t allowed);
 size_t security_audit_copy_recent(security_audit_event_t *out, size_t capacity);
-security_mrac_decision_t security_mrac_record_write(uint32_t pid, uint32_t uid, uint32_t caps, const char *path, size_t size);
+security_mrac_decision_t security_mrac_record_write(uint32_t pid, uint32_t uid, uint32_t caps, const char *path, size_t size, uint64_t file_identity);
 uint8_t security_mrac_pid_quarantined(uint32_t pid);
 void security_mrac_reap_pid(uint32_t pid);
 security_mrac_decision_t security_mrac_record_quarantine_activity(uint32_t pid, uint32_t uid, uint32_t caps,

@@ -44,6 +44,7 @@
 #include <unos/spotlight.h>
 #include <unos/syscall.h>
 #include <unos/timezone.h>
+#include <unos/ui_theme.h>
 #include <unos/tty.h>
 #include <unos/vex_abi.h>
 #include <unos/udp.h>
@@ -592,6 +593,9 @@ void kmain(void) {
     boot_console_stage("Timezone",0);
     timezone_init();
     boot_console_stage("Timezone",1);
+    /* The system palette: restored from /etc/kyil/theme.conf, republished
+       there for the applications. */
+    ui_theme_init();
     boot_console_stage("Spotlight",0);
     spotlight_index_build();
     boot_console_stage("Spotlight",1);

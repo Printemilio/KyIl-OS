@@ -1,5 +1,6 @@
 // KyIlOS native editor: all document state, commands, editing and UI are Suchu.
 import "editor_model.suchu";
+import "kyil_icons.suchu";
 import platform;
 import textbytes;
 import files;
@@ -16,14 +17,15 @@ shift_down = false; show_numbers = true; search_open = false; notice = "";
 scroll_drag = 0; menu_open = "";
 modal = ""; modal_doc = none; pending_action = ""; overwrite_path = "";
 window_discards = []; exit_allowed = false; request_enter = false;
-cell = 10; row_height = 24; visible_rows = 20; visible_cols = 80;
+cell = 10; row_height = 22; visible_rows = 20; visible_cols = 80;
+status_left = ""; status_right = ""; hint = "";
 
 fun document() { return docs[selected]; }
 fun add_document(d) { d.id = next_id; next_id = next_id + 1; push(docs, d); selected = len(docs) - 1; editor_focus = true; blur(); chrome.invalidate(); }
 fun select_document(index) { selected = index; blur(); editor_focus = true; chrome.invalidate(); }
 fun toggle_menu(name) {
   menu_open = if menu_open == name then "" else name;
-  set_visible(file_menu, menu_open == "file"); set_visible(edit_menu, menu_open == "edit"); set_visible(view_menu, menu_open == "view");
+  set_visible(more_menu, menu_open == "more");
 }
 fun new_document() { if modal != "" { return; } add_document(editor_model.create("", "")); }
 fun open_file(path) {
@@ -34,13 +36,11 @@ fun open_file(path) {
 fun dismiss_dialog() {
   modal = ""; modal_doc = none; pending_action = ""; overwrite_path = "";
   set_visible(dialog, false); blur(); editor_focus = true; request_enter = false;
-  set_enabled(commands, true); set_enabled(tabstrip, true); set_enabled(search_bar, true);
-  set_enabled(file_menu, true); set_enabled(edit_menu, true); set_enabled(view_menu, true);
+  set_enabled(header, true); set_enabled(search_bar, true); set_enabled(more_menu, true);
 }
 fun dialog_for(kind, d, action) {
   modal = kind; modal_doc = d; pending_action = action; editor_focus = false;
-  set_enabled(commands, false); set_enabled(tabstrip, false); set_enabled(search_bar, false);
-  set_enabled(file_menu, false); set_enabled(edit_menu, false); set_enabled(view_menu, false);
+  set_enabled(header, false); set_enabled(search_bar, false); set_enabled(more_menu, false);
   set_visible(dialog, true); set_visible(path_input, kind == "open" || kind == "save");
   set_visible(discard_button, kind == "confirm");
   set_text(confirm_button, if kind == "open" then "Open" else if kind == "overwrite" then "Replace" else "Save");
@@ -232,22 +232,66 @@ fun process_events(bounds) {
     }
   }
 }
-fun draw_tabs() {
-  draw.clear(1710622); width = max(120, min(230, (draw.width() - 40) / max(1, len(docs))));
+fun hovering(id) {
+  b = get_bounds(id);
+  return mouse.x() >= b[0] && mouse.y() >= b[1] && mouse.x() < b[0] + b[2] && mouse.y() < b[1] + b[3];
+}
+// 32px icon button at x in the header; true when clicked.
+fun tool(x, name, enabled, label, on) {
+  b = get_bounds(header); lx = mouse.x() - b[0];
+  over = hovering(header) && lx >= x && lx < x + 32;
+  if on { draw.round_rect(x, 6, 32, 32, 7, "accent_soft"); }
+  else if over && enabled { kyil_icons.plate(x, 6, 32, 32, true, mouse.down()); }
+  if over { hint = label; }
+  kyil_icons.icon(name, x + 7, 13, 18, if !enabled then "faint" else if over || on then "text" else "muted");
+  return over && enabled && mouse.pressed() && modal == "";
+}
+// Documents as tabs on the left, actions as icons on the right, one line.
+fun draw_header() {
+  draw.clear("window"); w = draw.width(); tools_w = 300;
+  room = max(120, w - tools_w - 24);
+  width = max(110, min(220, room / max(1, len(docs))));
+  b = get_bounds(header);
   for i in 0..(len(docs) - 1) {
-    x = i * width; d = docs[i];
-    if i == selected { draw.rect(x, 0, width, 34, 3421239); draw.rect(x, 32, width, 2, 11176191); }
+    x = 8 + i * width; d = docs[i];
+    if x + width > room + 8 { break; }
+    over = hovering(header) && mouse.x() - b[0] >= x && mouse.x() - b[0] < x + width;
+    if i == selected { draw.round_rect(x, 6, width - 4, 32, 8, "panel"); }
+    else if over { draw.round_rect(x, 6, width - 4, 32, 8, "hover"); }
     name = if d.path == "" then "Untitled " @ d.id else d.path.split("/")[len(d.path.split("/")) - 1];
-    at = 0; chars = 0; while at < len(name) && chars < 22 { at = textbytes.next(name, at); chars = chars + 1; }
+    at = 0; chars = 0; while at < len(name) && chars < 20 { at = textbytes.next(name, at); chars = chars + 1; }
     if at < len(name) { name = textbytes.sub(name, 0, at) @ "…"; }
-    draw.text(x + 10, 8, (if editor_model.dirty(d) then "* " else "") @ name, 14, 15395562);
-    draw.text(x + width - 22, 8, "×", 15, 11182266);
-    b = get_bounds(tabstrip);
-    if modal == "" && mouse.pressed() && mouse.y() >= b[1] && mouse.y() < b[1] + b[3] && mouse.x() >= b[0] + x && mouse.x() < b[0] + x + width {
-      if mouse.x() >= b[0] + x + width - 28 { close_tab(i); return; }
+    kyil_icons.icon("document", x + 10, 13, 16, if i == selected then "accent" else "faint");
+    draw.text(x + 32, 13, name, 13, if i == selected then "text" else "muted");
+    // A dot for unsaved changes; it turns into × under the pointer.
+    if over || i == selected {
+      if editor_model.dirty(d) && !over { draw.circle(x + width - 20, 22, 3.5, "accent"); }
+      else { kyil_icons.icon("close", x + width - 28, 15, 14, if over && mouse.x() - b[0] >= x + width - 32 then "text" else "faint"); }
+    } else if editor_model.dirty(d) { draw.circle(x + width - 20, 22, 3.5, "accent"); }
+    if modal == "" && mouse.pressed() && over {
+      if mouse.x() - b[0] >= x + width - 32 { close_tab(i); return; }
       select_document(i);
     }
   }
+  t = w - tools_w;
+  if tool(t, "plus", true, "New  (Ctrl+N)", false) { new_document(); }
+  if tool(t + 34, "open", true, "Open  (Ctrl+O)", false) { request_open(); }
+  if tool(t + 68, "save", true, "Save  (Ctrl+S)", false) { save_document(false); }
+  draw.rect(t + 108, 14, 1, 16, "divider");
+  if tool(t + 116, "undo", true, "Undo  (Ctrl+Z)", false) { if modal == "" { editor_model.undo(document()); ensure_visible(document()); } }
+  if tool(t + 150, "redo", true, "Redo  (Ctrl+Y)", false) { if modal == "" { editor_model.redo(document()); ensure_visible(document()); } }
+  draw.rect(t + 190, 14, 1, 16, "divider");
+  if tool(t + 198, "search", true, "Find and replace  (Ctrl+F)", search_open) { open_search(); }
+  if tool(t + 232, "numbers", true, "Line numbers", show_numbers) { show_numbers = !show_numbers; }
+  if tool(t + 266, "more", true, "More", menu_open == "more") { toggle_menu("more"); }
+  draw.rect(0, draw.height() - 1, w, 1, "divider");
+}
+fun draw_status() {
+  draw.clear("window"); draw.rect(0, 0, draw.width(), 1, "divider");
+  draw.text(14, 7, status_left, 12, "muted");
+  right = if hint != "" then hint else status_right;
+  draw.text(draw.width() - draw.measure(right, 12) - 14, 7, right, 12, "faint");
+  hint = "";
 }
 fun draw_document() {
   if !initialized {
@@ -255,100 +299,80 @@ fun draw_document() {
     if len(args) > 0 { path = args[0]; } if path != "" { open_file(path); if len(docs) > 1 { remove(docs, 0); selected = 0; } }
     initialized = true;
   }
-  draw.font("mono"); cell = draw.measure("M", 18); b = get_bounds(viewport);
+  draw.font("mono"); cell = draw.measure("M", 15); b = get_bounds(viewport);
   visible_rows = max(1, round(floor((b[3] - 14) / row_height))); gutter = if show_numbers then 58 else 12;
   visible_cols = max(1, round(floor((b[2] - gutter - 12) / cell)));
-  process_events(b); d = document(); draw.clear(1184276);
-  if show_numbers { draw.rect(0, 0, 48, b[3], 1579290); }
+  process_events(b); d = document(); draw.clear("window");
+
   row = d.top; y = 0; low = min(d.state[3], d.state[4]); high = max(d.state[3], d.state[4]); view_cache = [];
   while row < d.state[2] && y < b[3] - 14 {
-    if show_numbers { draw.text(8, y + 3, "" @ (row + 1), 14, 8948622); }
+    if show_numbers {
+      number = "" @ (row + 1);
+      draw.text(42 - draw.measure(number, 13), y + 4, number, 13, if editor_model.line_at(d, d.state[3]) == row then "muted" else "faint");
+    }
     start = editor_model.clipped_start(d, row, d.horizontal); push(view_cache, start);
     at = start[1]; col = start[2]; end = editor_model.line_end(d, row); rendered = "";
-    if editor_model.line_at(d, d.state[3]) == row { draw.rect(gutter, y, b[2] - gutter, row_height, 1776931); }
+    if editor_model.line_at(d, d.state[3]) == row { draw.rect(gutter, y, b[2] - gutter, row_height, "hover"); }
     while at < end && col < d.horizontal + visible_cols {
       next = editor_model.next(d, at); glyph = editor_model.slice(d, at, next - at);
       after = if glyph == "\t" then (round(floor(col / 4)) + 1) * 4 else col + 1;
       left = max(col, d.horizontal); right = min(after, d.horizontal + visible_cols);
       if right > left {
-        if at < high && next > low { draw.rect(gutter + (left - d.horizontal) * cell, y, (right - left) * cell, row_height, 4730729); }
+        if at < high && next > low { draw.rect(gutter + (left - d.horizontal) * cell, y, (right - left) * cell, row_height, "selection"); }
         if glyph == "\t" { j = left; while j < right { rendered = rendered @ " "; j = j + 1; } }
         else { rendered = rendered @ glyph; }
       }
       col = after; at = next;
     }
-    draw.text(gutter, y + 2, rendered, 18, 15395562);
+    draw.text(gutter, y + 3, rendered, 15, "text");
     if editor_focus && window_focus && editor_model.line_at(d, d.state[3]) == row {
       caret_col = editor_model.column(d, d.state[3]) - d.horizontal;
-      if caret_col >= 0 && caret_col < visible_cols { draw.rect(gutter + caret_col * cell, y + 2, 2, 20, 12157695); }
+      if caret_col >= 0 && caret_col < visible_cols { draw.rect(gutter + caret_col * cell, y + 2, 2, 18, "accent"); }
     }
     // Include the selected newline in a continuous multi-line range.
-    if end >= low && end < high { draw.rect(gutter + max(0, col - d.horizontal) * cell, y, cell, row_height, 4730729); }
+    if end >= low && end < high { draw.rect(gutter + max(0, col - d.horizontal) * cell, y, cell, row_height, "selection"); }
     row = row + 1; y = y + row_height;
   }
   d.view_cache = view_cache; d.state[7] = d.state[1] + 1;
   thumb = min(b[3] - 14, max(12, visible_rows / max(1, d.state[2]) * (b[3] - 14)));
-  draw.rect(b[2] - 8, d.top / max(1, d.state[2] - visible_rows) * (b[3] - 14 - thumb), 6, thumb, 6381921);
-  draw.rect(gutter, b[3] - 8, min(b[2] - gutter, visible_cols * cell), 3, 3421239);
-  set_text(status, "Ln " @ (editor_model.line_at(d, d.state[3]) + 1) @ ", Col " @ (editor_model.column(d, d.state[3]) + 1) @ "   " @ (if editor_model.dirty(d) then "Modified" else if d.path == "" then "Unmodified" else "Saved") @ "   UTF-8 / " @ (if d.eol == "\r\n" then "CRLF" else "LF") @ "   Clipboard: local   " @ notice);
+  if d.state[2] > visible_rows { draw.round_rect(b[2] - 8, d.top / max(1, d.state[2] - visible_rows) * (b[3] - 14 - thumb), 5, thumb, 3, "faint"); }
+  status_left = "Ln " @ (editor_model.line_at(d, d.state[3]) + 1) @ ", Col " @ (editor_model.column(d, d.state[3]) + 1) @ (if notice != "" then "   ·   " @ notice else "");
+  status_right = (if editor_model.dirty(d) then "Edited" else if d.path == "" then "New" else "Saved") @ "   ·   UTF-8   ·   " @ (if d.eol == "\r\n" then "CRLF" else "LF");
   if request_enter { request_enter = false; confirm_dialog(); }
 }
 
 platform.install(true);
 chrome.on_close(window_close);
 Window("KyIl Editor", 1000px, 680px) {
-  background: #121214; layout: column; padding: 0px; spacing: 0px; exit-key: "none";
+  background: window; color: text; layout: column; padding: 0px; spacing: 0px; exit-key: "none";
+  Canvas { id: "header"; width: fill; height: 45px; onDraw: { if initialized { draw_header(); } }; }
+  Row { id: "more_menu"; width: fill; height: 44px; spacing: 6px; padding: 7px; visible: false; background: panel; align: center;
+    Button { height: 30px; padding: 10px; font-size: 13px; border-radius: 7px; background: panel; hover-background: hover; color: text; text: "Save as…"; onClick: { toggle_menu(""); save_document(true); }; }
+    Button { height: 30px; padding: 10px; font-size: 13px; border-radius: 7px; background: panel; hover-background: hover; color: text; text: "Close document"; onClick: { toggle_menu(""); close_tab(selected); }; }
+    Button { height: 30px; padding: 10px; font-size: 13px; border-radius: 7px; background: panel; hover-background: hover; color: text; text: "Copy"; onClick: { copy_selection(false); }; }
+    Button { height: 30px; padding: 10px; font-size: 13px; border-radius: 7px; background: panel; hover-background: hover; color: text; text: "Cut"; onClick: { copy_selection(true); }; }
+    Button { height: 30px; padding: 10px; font-size: 13px; border-radius: 7px; background: panel; hover-background: hover; color: text; text: "Paste"; onClick: { paste(); ensure_visible(document()); }; }
+    Button { height: 30px; padding: 10px; font-size: 13px; border-radius: 7px; background: panel; hover-background: hover; color: text; text: "Select all"; onClick: { d = document(); d.state[4] = 0; d.state[3] = d.state[1]; editor_focus = true; }; }
+    Spacer { width: fill; }
+    Label { text: "UTF-8  ·  tab width 4  ·  line endings kept"; color: faint; font-size: 12px; }
+    Button { height: 30px; padding: 10px; font-size: 13px; border-radius: 7px; background: panel; hover-background: hover; color: danger; text: "Quit"; onClick: { toggle_menu(""); chrome.close(); }; }
+  }
   Row {
-    id: "commands"; width: fill; height: 40px; padding: 5px; spacing: 5px; background: #202024; color: #eeeeee;
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "File"; onClick: { toggle_menu("file"); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Edit"; onClick: { toggle_menu("edit"); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "View"; onClick: { toggle_menu("view"); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "New"; onClick: { new_document(); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Open…"; onClick: { request_open(); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Save"; onClick: { save_document(false); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Undo"; onClick: { if modal == "" { editor_model.undo(document()); ensure_visible(document()); } }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Redo"; onClick: { if modal == "" { editor_model.redo(document()); ensure_visible(document()); } }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Find / replace"; onClick: { open_search(); }; }
-  }
-  Row { id: "file_menu"; width: fill; height: 36px; spacing: 6px; padding: 4px; visible: false; background: #30243b;
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "New"; onClick: { toggle_menu(""); new_document(); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Open…"; onClick: { toggle_menu(""); request_open(); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Save"; onClick: { toggle_menu(""); save_document(false); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Save as…"; onClick: { toggle_menu(""); save_document(true); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Close document"; onClick: { toggle_menu(""); close_tab(selected); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Exit"; onClick: { toggle_menu(""); chrome.close(); }; }
-  }
-  Row { id: "edit_menu"; width: fill; height: 36px; spacing: 6px; padding: 4px; visible: false; background: #30243b;
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Copy"; onClick: { copy_selection(false); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Cut"; onClick: { copy_selection(true); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Paste"; onClick: { paste(); ensure_visible(document()); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Select all"; onClick: { d = document(); d.state[4] = 0; d.state[3] = d.state[1]; editor_focus = true; }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Find / replace"; onClick: { toggle_menu(""); open_search(); }; }
-  }
-  Row { id: "view_menu"; width: fill; height: 36px; spacing: 6px; padding: 4px; visible: false; background: #30243b;
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Line numbers"; onClick: { show_numbers = !show_numbers; toggle_menu(""); }; }
-    Label { text: "UTF-8  ·  Tab width: 4  ·  LF/CRLF preserved"; color: #eeeeee; }
-  }
-  Canvas { id: "tabstrip"; width: fill; height: 34px; onDraw: { if initialized { draw_tabs(); } }; }
-  Row {
-    id: "search_bar"; width: fill; height: 40px; padding: 5px; spacing: 5px; visible: false;
-    Input { id: "find_input"; width: fill; placeholder: "Find"; }
-    Input { id: "replace_input"; width: fill; placeholder: "Replace with"; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Next"; onClick: { search_next(); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Replace"; onClick: { replace_match(); }; }
-    Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "All"; onClick: { replace_all(); }; }
+    id: "search_bar"; width: fill; height: 48px; padding: 8px; spacing: 8px; visible: false; background: panel; align: center;
+    Input { id: "find_input"; width: fill; height: 32px; padding: 10px; border-radius: 8px; font-size: 13px; background: field; border-color: field_border; focus-color: accent; color: text; placeholder: "Find"; }
+    Input { id: "replace_input"; width: fill; height: 32px; padding: 10px; border-radius: 8px; font-size: 13px; background: field; border-color: field_border; focus-color: accent; color: text; placeholder: "Replace with"; }
+    Button { height: 30px; padding: 10px; font-size: 13px; border-radius: 7px; background: accent; color: on_accent; text: "Next"; onClick: { search_next(); }; }
+    Button { height: 30px; padding: 10px; font-size: 13px; border-radius: 7px; background: panel; hover-background: hover; color: text; text: "Replace"; onClick: { replace_match(); }; }
+    Button { height: 30px; padding: 10px; font-size: 13px; border-radius: 7px; background: panel; hover-background: hover; color: text; text: "All"; onClick: { replace_all(); }; }
   }
   Canvas { id: "viewport"; width: fill; height: fill; onDraw: { draw_document(); }; }
-  Column {
-    id: "dialog"; width: fill; height: 122px; padding: 10px; spacing: 6px; visible: false; background: #30243b;
-    Label { id: "dialog_message"; text: ""; color: #eeeeee; }
-    Input { id: "path_input"; width: fill; height: 30px; background: #202024; color: #eeeeee; }
-    Row {
-      spacing: 8px;
-      Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; id: "confirm_button"; text: "Save"; onClick: { confirm_dialog(); }; }
-      Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; id: "discard_button"; text: "Discard"; onClick: { discard_dialog(); }; }
-      Button { height: 28px; padding: 6px; font-size: 14px; border-radius: 4px; background: #2c2535; text: "Cancel"; onClick: { cancel_dialog(); }; }
-    }
+  Row {
+    id: "dialog"; width: fill; height: 56px; padding: 12px; spacing: 10px; visible: false; background: panel; align: center;
+    Label { id: "dialog_message"; text: ""; color: text; font-size: 13px; }
+    Input { id: "path_input"; width: fill; height: 32px; padding: 10px; border-radius: 8px; font-size: 13px; background: field; border-color: field_border; focus-color: accent; color: text; }
+    Button { height: 30px; padding: 10px; font-size: 13px; border-radius: 7px; background: panel; hover-background: hover; color: text; text: "Cancel"; onClick: { cancel_dialog(); }; }
+    Button { height: 30px; padding: 10px; font-size: 13px; border-radius: 7px; background: panel; hover-background: hover; color: danger; id: "discard_button"; text: "Discard"; onClick: { discard_dialog(); }; }
+    Button { height: 30px; padding: 10px; font-size: 13px; border-radius: 7px; background: accent; color: on_accent; id: "confirm_button"; text: "Save"; onClick: { confirm_dialog(); }; }
   }
-  Label { id: "status"; width: fill; height: 26px; font-size: 12px; padding: 5px; color: #bdb3ce; background: #202024; text: "Starting…"; }
+  Canvas { id: "status"; width: fill; height: 28px; onDraw: { draw_status(); }; }
 }

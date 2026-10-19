@@ -82,6 +82,10 @@ int app_surface_send_mouse_to_focused(uint64_t x, uint64_t y, uint32_t flags);
 void app_surface_focus(uint32_t window_id);
 int app_surface_raise_owner(uint32_t owner_pid);
 int app_surface_notify(uint32_t owner_pid,uint32_t window_id,uint32_t tag);
+/* Coalesced NOTIFY to every open window, e.g. VEX_APP_NOTIFY_THEME. */
+void app_surface_notify_all(uint32_t tag);
+/* Name of the focused window without the "KyIl " prefix, or NULL. */
+const char *app_surface_focused_name(void);
 void app_surface_blur(void);
 int app_surface_has_keyboard_focus(void);
 int app_surface_has_raw_keyboard_focus(void);

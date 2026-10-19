@@ -102,6 +102,7 @@ static uint32_t object_type(void *h,const char **name){
         unsigned (WR_WIN *id)(void *)=wr_thread_exports("GetThreadId");if(!id(h))return 0xc0000008u;*name="Thread";return 0;
     }
     if(tag==0x57 || tag==0x55){if(!(tag==0x57?wr_file_valid(h):wr_pipe_valid(h)))return 0xc0000008u;*name="File";return 0;}
+    if(tag==0x62){unsigned flags;if(!wr_token_flags(h,0,0,&flags))return 0xc0000008u;*name="Token";return 0;}
     if(tag==0x59){*name=wr_object_type(h);return *name?0:0xc0000008u;}
     if(tag==0x58){if(!wr_mapping_valid(h))return 0xc0000008u;*name="Section";return 0;}
     if(tag==0x5d){unsigned flags;if(!wr_job_flags(h,0,0,&flags))return 0xc0000008u;*name="Job";return 0;}

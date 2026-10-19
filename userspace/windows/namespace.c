@@ -1,5 +1,6 @@
 #include "windows.h"
 #include "process.h"
+#include "resource_protocol.h"
 #include <unos/vex_abi.h>
 #include "vex_syscall.h"
 static char prefix[512],application[512],username[32],guest_image[512],guest_cwd[512];
@@ -8,12 +9,38 @@ static int cwd_anchor[2]={-1,-1};
 static unsigned current_drive;
 static wr_mutex cwd_gate;
 static int c_root=-1,a_root=-1,system_root=-1;
+static int resource_service=-1; /* serialized by cwd_gate; native FD teardown owns it */
 static int prefix_matches(const char *,const char *);
 static int path_native_locked(const uint16_t *,char *,size_t,int);
 static int set_cwd_locked(const uint16_t *,int);
 static int native_root(unsigned op,int fd,unsigned rights,const char *path,unsigned flags,unsigned mode,void *out) {
     vex_fs_root_req_t r={.size=sizeof(r),.operation=op,.fd=fd,.rights=rights,.path=path,.flags=flags,.mode=mode,.out=out};
     return (int)(int64_t)vex_syscall1(VEX_SYS_FS_ROOT,(uintptr_t)&r);
+}
+static void close_fd(int fd){if(fd>=0)vex_syscall1(VEX_SYS_CLOSE,fd);}
+static int protected_open(int root,const char *path,unsigned flags) {
+    if(wr_len(path)>=sizeof(((kr_open *)0)->path))return -36;
+    if(resource_service<0) {
+        int image=native_root(VEX_FS_ROOT_OPEN,system_root,0,"resource-service",O_RDONLY|O_CLOEXEC|VEX_FS_OPEN_REGULAR|VEX_FS_OPEN_EXECUTABLE,0,0);
+        if(image<0)return image;
+        vex_process_resource_req_t launch={.size=sizeof(launch),.operation=VEX_PROCESS_ULTRA_OPEN,.fd=image,.status=c_root};
+        resource_service=(int)(int64_t)vex_syscall1(VEX_SYS_PROCESS_RESOURCE,(uintptr_t)&launch);close_fd(image);
+        if(resource_service<0)return resource_service;
+    }
+    int grant=native_root(VEX_FS_ROOT_DERIVE,root,VEX_FS_READ|VEX_FS_TRANSFER,"",0,0,0);if(grant<0)return grant;
+    int fds[2];vex_message_pair_req_t pair={fds,0,0};int n=(int)(int64_t)vex_syscall1(VEX_SYS_MESSAGE_PAIR,(uintptr_t)&pair);
+    if(n){close_fd(grant);return n;}
+    kr_open p={.magic=KR_MAGIC,.flags=flags};memcpy(p.path,path,wr_len(path)+1);
+    vex_message_attachment_req_t a[2]={{(unsigned)grant,VEX_MESSAGE_OBJECT_FD,VEX_MESSAGE_ATTACHMENT_DUP},{(unsigned)fds[1],VEX_MESSAGE_OBJECT_FD,VEX_MESSAGE_ATTACHMENT_DUP}};
+    vex_message_io_req_t q={resource_service,0,&p,sizeof(p),a,2};
+    n=(int)(int64_t)vex_syscall1(VEX_SYS_MESSAGE_SEND,(uintptr_t)&q);close_fd(grant);close_fd(fds[1]);
+    if(n!=sizeof(p)){close_fd(fds[0]);return n<0?n:-5;}
+    a[0]=(vex_message_attachment_req_t){UINT64_MAX,VEX_MESSAGE_OBJECT_FD,0};q=(vex_message_io_req_t){fds[0],0,&p,sizeof(p),a,1};
+    n=(int)(int64_t)vex_syscall1(VEX_SYS_MESSAGE_RECV,(uintptr_t)&q);close_fd(fds[0]);
+    if(n!=sizeof(p) || p.magic!=KR_MAGIC || p.result>0 || (!!q.attachment_count)!=!p.result) {
+        if(n>=0 && q.attachment_count)close_fd((int)a[0].handle);return n<0?n:-5;
+    }
+    return p.result?p.result:(int)a[0].handle;
 }
 static int grant_root(const char *path,unsigned rights) {
     int fd=native_root(VEX_FS_ROOT_CREATE,0,rights,path,0,0,0);if(fd<0)return -1;
@@ -166,6 +193,7 @@ static int guest_from_native(const char *native,uint16_t *out,size_t capacity) {
 int wr_path_guest(const uint16_t *source,uint16_t *out,size_t capacity){
     char native[1024];if(wr_path_native(source,native,sizeof(native),0))return -1;return guest_from_native(native,out,capacity);
 }
+int wr_namespace_project_path(const char *path,uint16_t *out,size_t capacity){return guest_from_native(path,out,capacity);}
 static int directory_locked(const uint16_t *source,unsigned rights) {
     char native[1024];if(path_native_locked(source,native,sizeof(native),0))return -13;
     int root;size_t length;
@@ -248,8 +276,10 @@ static int namespace_call_locked(unsigned operation,const uint16_t *name,unsigne
     const char *system="Windows/System32/";
     size_t sys=wr_len(system);int match=1;for(size_t i=0;i<sys;i++){if(!relative[i]){match=0;break;}unsigned a=(unsigned char)relative[i],b=(unsigned char)system[i];if(a>='A' && a<='Z')a+=32;if(b>='A' && b<='Z')b+=32;if(a!=b){match=0;break;}}
     if(fd==c_root && match && wr_native_module_name(relative+sys)) {
+        if(operation==VEX_FS_ROOT_OPEN && (flags&VEX_FS_OPEN_PROTECTED))return protected_open(system_root,relative+sys,flags);
         return native_root(operation,system_root,0,relative+sys,flags,mode,out);
     }
+    if(operation==VEX_FS_ROOT_OPEN && (flags&VEX_FS_OPEN_PROTECTED))return protected_open(fd,relative,flags);
     return native_root(operation,fd,0,relative,flags,mode,out);
 }
 int wr_namespace_call(unsigned operation,const uint16_t *name,unsigned flags,unsigned mode,void *out,int writing){
@@ -304,7 +334,11 @@ static unsigned WR_WIN GetTempPathW(unsigned size,uint16_t *out) {
 }
 static int WR_WIN CreateDirectoryW(const uint16_t *name,void *security) {
     if(security) {wr_current_teb()->last_error=50;return 0;}
-    int result=wr_namespace_call(VEX_FS_ROOT_MKDIR,name,0,0700,0,1);if(!result)return 1;
+    int result=wr_namespace_call(VEX_FS_ROOT_MKDIR,name,0,0700,0,1);
+    static unsigned traced;if(__atomic_fetch_add(&traced,1,__ATOMIC_RELAXED)<48){char path[1024];
+        if(!wr_utf8(name,path,sizeof(path))){wr_log("windows-directory: ");wr_log(path);wr_log("\n");}
+        wr_trace_contract("CreateDirectoryW: native-result security reserved site",(uintptr_t)(intptr_t)result,(uintptr_t)security,0,(uintptr_t)__builtin_return_address(0));}
+    if(!result)return 1;
     unsigned error=(unsigned)-result;
     wr_current_teb()->last_error=error==17?183:(error==2?3:(error==12?8:5));return 0;
 }

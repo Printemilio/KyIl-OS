@@ -65,7 +65,7 @@ static void copy_string(char *dst, const char *src, size_t capacity) {
 }
 
 static void prompt(void) {
-    tty_puts("KyIlOS $ ");
+    tty_puts("KyIl-OS $ ");
 }
 
 static int shell_try_next_key(char *out_key) {

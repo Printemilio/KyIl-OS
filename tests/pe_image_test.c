@@ -28,7 +28,11 @@ int main(void) {
     fixture();u32(152+16,4096+600);CHECK(pe_parse(f,sizeof(f),&im)!=0);
     fixture();u32(152+108,17);CHECK(pe_parse(f,sizeof(f),&im)!=0);
     fixture();CHECK(!pe_parse(f,sizeof(f),&im));memset(b,0,sizeof(b));
+    CHECK(!im.relocations_stripped && !pe_relocate(b,&im,im.preferred+65536));
+    u16(150,3);CHECK(!pe_parse(f,sizeof(f),&im) && im.relocations_stripped);
     CHECK(pe_relocate(b,&im,im.preferred+65536)!=0);
+    CHECK(!pe_relocate(b,&im,im.preferred));
+    u16(150,2);CHECK(!pe_parse(f,sizeof(f),&im));
     im.dirs[5][0]=8192;im.dirs[5][1]=12;
     b[8192+1]=0x10;b[8196]=12;b[8200]=16;b[8201]=0xa0;pe_put64(b+4112,im.preferred+123);
     CHECK(!pe_relocate(b,&im,im.preferred+65536));CHECK(pe_u64(b+4112)==im.preferred+65536+123);

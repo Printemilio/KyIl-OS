@@ -1,4 +1,6 @@
 #include <unos/security.h>
+#include <unos/kernel_guard.h>
+#include <unos/security_write_window.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -10,21 +12,15 @@
 #define SECURITY_WATCHDOG_COUNT 2u
 #define SECURITY_WATCHDOG_SCAN_SLEEP_TICKS 40ull
 #define SECURITY_WATCHDOG_PEER_STALL_TICKS 320ull
-#define SECURITY_MRAC_WINDOW_TICKS 80ull
 #define SECURITY_MRAC_QUARANTINE_TICKS 24000ull
-#define SECURITY_MRAC_WRITE_THRESHOLD 14u
-#define SECURITY_MRAC_PATH_THRESHOLD 8u
 #define SECURITY_MRAC_KILL_AFTER_QUARANTINE_EVENTS 1u
 
 typedef struct security_mrac_guard {
     uint32_t pid;
     uint32_t uid;
-    uint32_t last_path_hash;
-    uint32_t write_count;
-    uint32_t path_changes;
+    security_write_window_t writes;
     uint32_t quarantine_events;
     uint64_t bytes_written;
-    uint64_t window_start_ticks;
     uint64_t quarantine_until_ticks;
 } security_mrac_guard_t;
 
@@ -51,6 +47,7 @@ static security_audit_event_t security_audit_events[SECURITY_AUDIT_CAPACITY];
 static size_t security_audit_next_index = 0u;
 static size_t security_audit_count = 0u;
 static security_mrac_guard_t security_mrac_guards[SECURITY_MRAC_GUARD_SLOTS];
+static kernel_gate_t write_guard_gate=KERNEL_GATE_INIT,audit_gate=KERNEL_GATE_INIT;
 static security_watchdog_track_t security_watchdog_tracks[SECURITY_WATCHDOG_TRACK_SLOTS];
 static security_watchdog_runtime_t security_watchdog_runtimes[SECURITY_WATCHDOG_COUNT];
 static uint8_t security_watchdogs_started;
@@ -69,19 +66,6 @@ static void copy_text(char *dst, size_t capacity, const char *src) {
         ++i;
     }
     dst[i] = '\0';
-}
-
-static uint32_t hash_text32(const char *text) {
-    uint32_t hash = 2166136261u;
-
-    if (text == NULL) {
-        return 0u;
-    }
-    for (size_t i = 0u; text[i] != '\0'; ++i) {
-        hash ^= (uint8_t)text[i];
-        hash *= 16777619u;
-    }
-    return hash;
 }
 
 static security_watchdog_track_t *security_watchdog_find_track(uint32_t pid) {
@@ -344,10 +328,8 @@ static void security_watchdog_b_loop(void) {
     security_watchdog_loop(1u);
 }
 
-static security_mrac_guard_t *find_or_allocate_guard(uint32_t pid) {
+static security_mrac_guard_t *find_or_allocate_guard(uint32_t pid,uint64_t now) {
     security_mrac_guard_t *free_slot = NULL;
-    const uint64_t now = scheduler_ticks_now();
-
     for (size_t i = 0u; i < SECURITY_MRAC_GUARD_SLOTS; ++i) {
         security_mrac_guard_t *guard = &security_mrac_guards[i];
         if (guard->pid == pid) {
@@ -361,12 +343,9 @@ static security_mrac_guard_t *find_or_allocate_guard(uint32_t pid) {
     if (free_slot != NULL) {
         free_slot->pid = pid;
         free_slot->uid = 0u;
-        free_slot->last_path_hash = 0u;
-        free_slot->write_count = 0u;
-        free_slot->path_changes = 0u;
+        free_slot->writes=(security_write_window_t){.start=now};
         free_slot->quarantine_events = 0u;
         free_slot->bytes_written = 0u;
-        free_slot->window_start_ticks = now;
         free_slot->quarantine_until_ticks = 0u;
     }
     return free_slot;
@@ -407,9 +386,10 @@ const char *security_cap_primary_name(uint32_t caps) {
 }
 
 void security_audit_log_event(const char *action, const char *target, uint32_t pid, uint32_t uid, uint32_t caps, uint8_t allowed) {
+    uint64_t now=scheduler_ticks_now();KERNEL_GUARD(audit_gate);
     security_audit_event_t *event = &security_audit_events[security_audit_next_index];
 
-    event->ticks = scheduler_ticks_now();
+    event->ticks = now;
     event->pid = pid;
     event->uid = uid;
     event->caps = security_cap_sanitize(caps);
@@ -424,6 +404,7 @@ void security_audit_log_event(const char *action, const char *target, uint32_t p
 }
 
 size_t security_audit_copy_recent(security_audit_event_t *out, size_t capacity) {
+    KERNEL_GUARD(audit_gate);
     size_t copied = 0u;
     size_t available = security_audit_count;
 
@@ -442,50 +423,18 @@ size_t security_audit_copy_recent(security_audit_event_t *out, size_t capacity) 
 }
 
 uint8_t security_mrac_pid_quarantined(uint32_t pid) {
-    const uint64_t now = scheduler_ticks_now();
-
-    if (pid == 0u) {
-        return 0u;
+    uint64_t now=scheduler_ticks_now();KERNEL_GUARD(write_guard_gate);
+    if(!pid)return 0;
+    for(unsigned i=0;i<SECURITY_MRAC_GUARD_SLOTS;i++)if(security_mrac_guards[i].pid==pid){
+        security_mrac_guard_t *g=&security_mrac_guards[i];
+        if(g->quarantine_until_ticks>now)return 1;
+        if(g->quarantine_until_ticks)*g=(security_mrac_guard_t){0};return 0;
     }
-    for (size_t i = 0u; i < SECURITY_MRAC_GUARD_SLOTS; ++i) {
-        security_mrac_guard_t *guard = &security_mrac_guards[i];
-        if (guard->pid != pid) {
-            continue;
-        }
-        if (guard->quarantine_until_ticks > now) {
-            return 1u;
-        }
-        if (guard->quarantine_until_ticks != 0u) {
-            guard->pid = 0u;
-            guard->quarantine_until_ticks = 0u;
-        }
-        return 0u;
-    }
-    return 0u;
+    return 0;
 }
-
 void security_mrac_reap_pid(uint32_t pid) {
-    if (pid == 0u) {
-        return;
-    }
-
-    for (size_t i = 0u; i < SECURITY_MRAC_GUARD_SLOTS; ++i) {
-        security_mrac_guard_t *guard = &security_mrac_guards[i];
-        if (guard->pid != pid) {
-            continue;
-        }
-
-        guard->pid = 0u;
-        guard->uid = 0u;
-        guard->last_path_hash = 0u;
-        guard->write_count = 0u;
-        guard->path_changes = 0u;
-        guard->quarantine_events = 0u;
-        guard->bytes_written = 0u;
-        guard->window_start_ticks = 0u;
-        guard->quarantine_until_ticks = 0u;
-        return;
-    }
+    KERNEL_GUARD(write_guard_gate);if(!pid)return;
+    for(unsigned i=0;i<SECURITY_MRAC_GUARD_SLOTS;i++)if(security_mrac_guards[i].pid==pid){security_mrac_guards[i]=(security_mrac_guard_t){0};return;}
 }
 
 void security_watchdog_note_process_state(uint32_t pid, uint32_t uid, uint8_t user_mode,
@@ -536,87 +485,35 @@ void security_watchdogs_start(void) {
     (void)security_watchdog_spawn_slot(1u);
 }
 
-security_mrac_decision_t security_mrac_record_write(uint32_t pid, uint32_t uid, uint32_t caps, const char *path, size_t size) {
-    security_mrac_guard_t *guard;
-    const uint64_t now = scheduler_ticks_now();
-    const uint32_t path_hash = hash_text32(path);
-
-    if (pid == 0u || (caps & VEX_CAP_SYSTEM_ADMIN) != 0u) {
-        return SECURITY_MRAC_ALLOW;
+security_mrac_decision_t security_mrac_record_write(uint32_t pid,uint32_t uid,uint32_t caps,const char *path,size_t size,uint64_t identity) {
+    if(!pid || (caps&VEX_CAP_SYSTEM_ADMIN))return SECURITY_MRAC_ALLOW;
+    if(!identity)return SECURITY_MRAC_QUARANTINE; /* kernel caller must supply a real file object */
+    uint64_t now=scheduler_ticks_now();security_mrac_decision_t result=SECURITY_MRAC_ALLOW;
+    {
+        KERNEL_GUARD(write_guard_gate);security_mrac_guard_t *g=find_or_allocate_guard(pid,now);
+        if(!g)return result;
+        if(g->quarantine_until_ticks>now)return SECURITY_MRAC_QUARANTINE;
+        g->uid=uid;g->bytes_written+=(uint64_t)size;
+        if(security_write_window_record(&g->writes,now,identity)){
+            g->quarantine_until_ticks=now+SECURITY_MRAC_QUARANTINE_TICKS;g->quarantine_events=0;result=SECURITY_MRAC_QUARANTINE;
+        }else if(g->writes.writes>=SECURITY_WRITE_THRESHOLD-2u && g->writes.distinct>=SECURITY_WRITE_IDENTITIES-1u)result=SECURITY_MRAC_WARN;
     }
-
-    guard = find_or_allocate_guard(pid);
-    if (guard == NULL) {
-        return SECURITY_MRAC_ALLOW;
-    }
-
-    if (guard->quarantine_until_ticks > now) {
-        return SECURITY_MRAC_QUARANTINE;
-    }
-
-    if (now - guard->window_start_ticks > SECURITY_MRAC_WINDOW_TICKS) {
-        guard->uid = uid;
-        guard->last_path_hash = 0u;
-        guard->write_count = 0u;
-        guard->path_changes = 0u;
-        guard->quarantine_events = 0u;
-        guard->bytes_written = 0u;
-        guard->window_start_ticks = now;
-    }
-
-    guard->uid = uid;
-    ++guard->write_count;
-    guard->bytes_written += (uint64_t)size;
-    if (guard->last_path_hash != 0u && guard->last_path_hash != path_hash) {
-        ++guard->path_changes;
-    }
-    guard->last_path_hash = path_hash;
-
-    if (guard->write_count >= SECURITY_MRAC_WRITE_THRESHOLD &&
-        guard->path_changes >= SECURITY_MRAC_PATH_THRESHOLD) {
-        guard->quarantine_until_ticks = now + SECURITY_MRAC_QUARANTINE_TICKS;
-        guard->quarantine_events = 0u;
-        security_audit_log_event("mrac-quarantine", path, pid, uid, caps, 0u);
-        (void)scheduler_set_process_capabilities(pid, 0u);
-        return SECURITY_MRAC_QUARANTINE;
-    }
-
-    if (guard->write_count + 2u >= SECURITY_MRAC_WRITE_THRESHOLD &&
-        guard->path_changes + 1u >= SECURITY_MRAC_PATH_THRESHOLD) {
-        security_audit_log_event("mrac-alert", path, pid, uid, caps, 0u);
-        return SECURITY_MRAC_WARN;
-    }
-
-    return SECURITY_MRAC_ALLOW;
+    /* Never take scheduler locks while holding the write-set gate: process
+       retirement calls security_mrac_reap_pid under scheduler ownership. */
+    if(result==SECURITY_MRAC_QUARANTINE){security_audit_log_event("mrac-quarantine",path,pid,uid,caps,0);(void)scheduler_set_process_capabilities(pid,0);}
+    else if(result==SECURITY_MRAC_WARN)security_audit_log_event("mrac-alert",path,pid,uid,caps,0);
+    return result;
 }
-
-security_mrac_decision_t security_mrac_record_quarantine_activity(uint32_t pid, uint32_t uid, uint32_t caps,
-                                                                  const char *action, const char *target) {
-    security_mrac_guard_t *guard;
-    const uint64_t now = scheduler_ticks_now();
-
-    if (pid == 0u) {
-        return SECURITY_MRAC_ALLOW;
+security_mrac_decision_t security_mrac_record_quarantine_activity(uint32_t pid,uint32_t uid,uint32_t caps,const char *action,const char *target) {
+    if(!pid)return SECURITY_MRAC_ALLOW;uint64_t now=scheduler_ticks_now();int kill=0;
+    {
+        KERNEL_GUARD(write_guard_gate);security_mrac_guard_t *g=find_or_allocate_guard(pid,now);
+        if(!g || g->quarantine_until_ticks<=now)return SECURITY_MRAC_ALLOW;
+        kill=++g->quarantine_events>=SECURITY_MRAC_KILL_AFTER_QUARANTINE_EVENTS;
     }
-
-    guard = find_or_allocate_guard(pid);
-    if (guard == NULL || guard->quarantine_until_ticks <= now) {
-        return SECURITY_MRAC_ALLOW;
-    }
-
-    ++guard->quarantine_events;
-    security_audit_log_event(action, target, pid, uid, caps, 0u);
-    if (guard->quarantine_events >= SECURITY_MRAC_KILL_AFTER_QUARANTINE_EVENTS) {
-        security_audit_log_event("mrac-kill", target, pid, uid, caps, 0u);
-        if (pid == scheduler_current_pid()) {
-            /* Called from inside file system operations: the process stops
-               on its way back to user mode, after the caller's locks. */
-            process_request_exit(128 + 9);
-        } else {
-            (void)process_kill(pid);
-        }
-        return SECURITY_MRAC_QUARANTINE;
-    }
-
+    security_audit_log_event(action,target,pid,uid,caps,0);
+    if(kill){security_audit_log_event("mrac-kill",target,pid,uid,caps,0);
+        if(pid==scheduler_current_pid())process_request_exit(128+9);else(void)process_kill(pid);
+        return SECURITY_MRAC_QUARANTINE;}
     return SECURITY_MRAC_WARN;
 }

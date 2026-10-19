@@ -1,137 +1,487 @@
 {
-  "checkpoint": "2026-10-18-startup-shared-events",
-  "source": "build/windows/chrome-inherited-streams-1-cpu-20261018-002846.log",
-  "historical_root_misses": {
-    "absent": 8,
-    "source": "build\\windows\\cwd-loader-fixed-1-cpu-20261017-001606.log",
-    "state": "implemented-and-executed; not the current frontier"
-  },
+  "checkpoint": "2026-10-18-ksw-import-batch",
+  "source": "build/windows/chrome-import-final-1-cpu-20261018-114231.log",
   "package_version": "155.0.8059.84",
   "entry_reached": true,
   "entry_address": "0x14023cd10",
   "chrome_gui_validated": false,
-  "root_static_missing": {
-    "chrome.exe": 0,
-    "chrome_elf.dll": 0
-  },
   "broader_chrome_dll_inventory": {
-    "source": "build/windows/chrome-startup-compiled-graph.json",
-    "static_missing_unique_contracts": 242,
-    "delayed_missing_unique_contracts": 766,
-    "nodes": 12,
-    "edges": 2902,
+    "source": "build/windows/chrome-import-batch-compiled-graph.json",
+    "static_missing_unique_contracts_before": 242,
+    "static_missing_unique_contracts": 157,
+    "static_missing_by_provider": {
+      "crypt32.dll": 26,
+      "dwrite.dll": 1,
+      "kernel32.dll": 104,
+      "ntdll.dll": 3,
+      "ws2_32.dll": 23
+    },
+    "delayed_missing_unique_contracts": 746,
+    "nodes": 13,
+    "edges": 2713,
     "parse_errors": 0,
-    "caveat": "Includes chrome.dll, whose entry is not reached. Counts are unique contracts, not import edges, and are sensitive to the explicit inventory search/census scope. Bindings remain partial contracts, not Windows conformance."
+    "caveat": "Compiled resolver plus current staged provider graph. Candidate bindings include ordinal aliases and partial contracts; this is not API conformance or GUI proof."
   },
   "current_frontier": {
-    "component": "Chrome parent USER32 and actual Crashpad child database initialization",
-    "create_process": "succeeds; second actual chrome.exe entry observed in 1 and 4 vCPU",
-    "observed_failures": [
-      {
-        "operation": "delayed load USER32.dll!FindWindowExW",
-        "library_error": 126,
-        "caller": "0x14023c1c5",
-        "state": "USER32 provider absent; not replaced by an empty lookup stub"
-      },
-      {
-        "operation": "Crashpad CreateDirectoryW",
-        "path": "C:\\Users\\root\\Temp\\Google\\Chrome\\User Data\\Crashpad",
-        "last_error": 3,
-        "state": "parent directory missing; no recursive mkdir or Chrome-specific precreation added"
-      },
-      {
-        "operation": "TransactNamedPipe",
-        "last_error": 109,
-        "state": "peer exits after database initialization failure; not evidence that capability transfer/spawn failed"
-      }
-    ],
-    "causal_boundary": "protected pipe, real shared inherited events and CreateProcess progress into actual child PE entry; child cannot initialize database; parent delayed USER32 call is independently unsupported",
-    "remaining_instrumentation": "Determine requested profile-folder/environment contract and directory-creation sequence; implement a real generic userspace USER32 window contract rather than claiming no window exists."
+    "component": "chrome.dll static dependency/import binding",
+    "causal_boundary": "Unmodified chrome.exe entry -> protected versioned DLL open -> 92 LongJump targets accepted -> WINMM and WS2_32 providers found -> unresolved imports remain -> CRYPT32.dll absent -> LoadLibraryExW error 126 -> Chrome exit 7",
+    "ksw": "KyIl Subsystem for Windows; KSL exclusively Linux",
+    "dependency_absence": "CRYPT32.dll",
+    "last_error": 126,
+    "chrome_exit": 7,
+    "chrome_dll_entry_reached": false,
+    "chrome_gui": false,
+    "independent_limits": [
+      "157 unique static contracts remain; CRYPT32 is not the sole missing contract.",
+      "746 delayed contracts and dynamically resolved names remain separate frontiers.",
+      "IPv4 synchronous Winsock is partial; no positive KyIlOS socket transport claimed.",
+      "WinMM adapter catalog is empty; no audio playback or timer-resolution negotiation claimed.",
+      "Safe DLL unload, process affinity query and linguistic lstrcmpW remain unexported.",
+      "Native security remains a bounded mass-rewrite heuristic, not complete malware detection.",
+      "No Chrome DLL initialization or Chrome GUI; no physical D630 or reboot persistence validation."
+    ]
   },
   "validated": {
-    "host_reference": "build/windows/chrome-startup-events-host-unsandboxed.log",
-    "host_protected_pipe": "build/windows/ultra-protected-host.log",
-    "vm1": {
-      "source": "build/windows/chrome-inherited-streams-1-cpu-20261018-002846.log",
-      "complete_runner": true,
-      "census": true,
-      "protected_pipe": true,
-      "ultra_space": true,
-      "shared_event": true,
-      "startup_contract": true,
-      "handle_value_retirement": true,
-      "chrome_pipe_success": true,
-      "actual_child_chrome_entry": true,
-      "chrome_gui": false
-    },
-    "vm4": {
-      "source": "build/windows/chrome-inherited-streams-4-cpu-20261018-002041.log",
-      "complete_runner": true,
-      "census": true,
-      "protected_pipe": true,
-      "ultra_space": true,
-      "shared_event": true,
-      "startup_contract": true,
-      "handle_value_retirement": true,
-      "chrome_pipe_success": true,
-      "actual_child_chrome_entry": true,
-      "chrome_gui": false
-    },
-    "benchmarks": "build/windows/ultra-final-bench.json",
-    "limits": "No Chrome GUI, USER32/GDI, physical Dell rerun, full graphics regression campaign, remote-process VM access, exhaustive event-service OOM injection or Windows conformance.",
-    "host_parser_comparisons": 60000,
-    "pe_graph_tests": 6,
-    "vm4_harness_incident": "Core inspection temporarily interrupted keyboard delivery after completed runner/census; command was retried manually from a clean prompt. Raw log retains the failed partial command. The harness now fails immediately on keyboard delivery errors."
-  },
-  "iso": {
-    "path": "build/kyilos-windows-process.iso",
-    "sha256": "40CA8EE3387DDD3F27F36B786D190C0FA8BCDCB7C9FD02954AD2A524733AC893",
-    "kernel_sha256": "DEAEF6EC86C16580D2BB020D6CF980BDE34F52D94A2CB7EF1743742D90FB75F8",
-    "event_service_sha256": "DA2AF6DBC252E277595F810BACE146ABE588C3EB1EFC47D4593C14D800CB6359",
-    "receipt": "build/windows/chrome-inherited-streams-iso.log"
-  },
-  "previous_frontier": {
-    "component": "chrome_elf / Crashpad",
-    "operation": "CreateNamedPipeW",
-    "return": "INVALID_HANDLE_VALUE",
-    "last_error": 50,
-    "access": "0x80003",
-    "mode": "0x6",
-    "instances": 2,
-    "output_buffer": 512,
-    "input_buffer": 512,
-    "timeout": 0,
-    "security_attributes_size": 24,
-    "inherit": true,
-    "descriptor": "non-null merged current-user DACL plus mandatory-label SACL",
-    "fatal": "crashpad_client_win.cc:330; chrome_elf.dll+0x1ff162",
-    "missing_contracts": [
-      "native-enforced per-client admission corresponding to the requested descriptor",
-      "named-pipe provider handle inheritance"
-    ],
-    "architecture_decision": "native generic identity-conditioned admission versus isolated userspace authority broker; pending user choice",
-    "state": "implemented; real Chrome protected/inheritable pipe succeeds in final 1/4-vCPU traces"
-  },
-  "prior_checkpoint_frontier": {
-    "component": "Chrome / Crashpad startup after successful Ultra-Space pipe creation",
-    "observed_failures": [
-      {
-        "operation": "InitializeCriticalSectionEx",
-        "source": "critical_section_with_debug_info.cc:35",
-        "last_error": 50
-      },
-      {
-        "operation": "OpenProcess",
-        "source": "crashpad_client_win.cc:430",
-        "last_error": 50
-      },
-      {
-        "operation": "delayed load SHELL32.dll!CommandLineToArgvW",
-        "library_error": 126
+    "report": "docs/windows-import-batch-2026-10-18.md",
+    "evidence": "build/windows/chrome-import-batch-validation.json",
+    "host": {
+      "complete_suite_source": "build/windows/chrome-import-batch-host.log",
+      "complete_suite_exit": 0,
+      "final_targeted_stdout": "build/windows/chrome-import-final-host-fixtures.log",
+      "final_targeted_exit": 0,
+      "winsock_reference": "Actual Windows UDP bytes, select, WSAEMSGSIZE on truncation, stale handles, ordinals, layout, events.",
+      "base_reference": "Actual Windows narrow-environment byte sizing, locale/module/CPU facts, errors, absent device and ANSI child exit 17.",
+      "restricted_invocation_failure": "Two sandboxed host attempts returned STATUS_INVALID_HANDLE (0xC0000008); authorized host execution passed. This was not guest KSW execution; restricted-host failure not otherwise diagnosed.",
+      "ws2_reference_version": "10.0.26100.8875 (WinBuild.160101.0800)",
+      "independent_tests": {
+        "import_graph": 7,
+        "native_write_policy_checks": 10065
       }
-    ],
-    "causal_boundary": "protected CreateNamedPipeW succeeds; crash server startup fails and reports self-termination at crashpad_client_win.cc:144",
-    "remaining_instrumentation": "Capture requested critical-section flags and OpenProcess rights before extending semantics; missing Shell32 delayed contract is separately identified."
+    },
+    "vm": {
+      "1": {
+        "source": "build/windows/chrome-import-final-1-cpu-20261018-114231.log",
+        "complete_runner_pass": true,
+        "registry_four_producers_96_values_pass": true,
+        "base_contracts_and_ansi_child_pass": true,
+        "winsock_layout_events_ordinals_native_net_connect_denial_pass": true,
+        "guest_positive_socket_transport_validated": false,
+        "census_rows_resolved": 856,
+        "census_absent": 0,
+        "chrome_exe_entries": 2,
+        "chrome_longjump_targets_accepted": 92,
+        "chrome_missing_dependency": "CRYPT32.dll",
+        "chrome_last_error": 126,
+        "chrome_exit": 7,
+        "chrome_dll_entry_reached": false,
+        "chrome_gui_validated": false,
+        "kernel_panic_observed": false,
+        "expected_guard_page_and_adversarial_user_faults_present": true,
+        "test_volume": "RAM filesystem fallback; persistence not claimed",
+        "native_shutdown_observed": true
+      },
+      "4": {
+        "source": "build/windows/chrome-import-final-4-cpu-20261018-114434.log",
+        "complete_runner_pass": true,
+        "registry_four_producers_96_values_pass": true,
+        "base_contracts_and_ansi_child_pass": true,
+        "winsock_layout_events_ordinals_native_net_connect_denial_pass": true,
+        "guest_positive_socket_transport_validated": false,
+        "census_rows_resolved": 856,
+        "census_absent": 0,
+        "chrome_exe_entries": 2,
+        "chrome_longjump_targets_accepted": 92,
+        "chrome_missing_dependency": "CRYPT32.dll",
+        "chrome_last_error": 126,
+        "chrome_exit": 7,
+        "chrome_dll_entry_reached": false,
+        "chrome_gui_validated": false,
+        "kernel_panic_observed": false,
+        "expected_guard_page_and_adversarial_user_faults_present": true,
+        "test_volume": "RAM filesystem fallback; persistence not claimed",
+        "native_shutdown_observed": true
+      }
+    },
+    "iso": {
+      "path": "build/kyilos-windows-process.iso",
+      "bytes": 2115528704,
+      "sha256": "27617A9BBB862A37AB379EEBDD9ED3D850D59465906EA9EEC40C2EA7F0BBB8E2",
+      "kernel_sha256": "51ED1B5FC23D5B08E0CE40CA8721723EFF116390760DBABFDDF84236098EE955",
+      "runtime_sha256": "DB6274CB55B889F1A314B9B526C29EB8573DE0145AC43568F75C854186C59764",
+      "portable_files_checked": 140,
+      "portable_file_mismatches": 0,
+      "kernel_scope": "Native write-security object-identity accounting and FS caller; no timer/scheduler/ORA/network changes in this batch."
+    },
+    "vm_final_state": "poweroff"
   },
-  "report": "docs/windows-startup-progress-2026-10-18.md"
+  "previous_checkpoint": {
+    "checkpoint": "2026-10-18-ksw-guard-longjump",
+    "source": "build/windows/longjump-final-1-cpu-20261018-101512.log",
+    "historical_root_misses": {
+      "absent": 8,
+      "source": "build\\windows\\cwd-loader-fixed-1-cpu-20261017-001606.log",
+      "state": "implemented-and-executed; not the current frontier"
+    },
+    "package_version": "155.0.8059.84",
+    "entry_reached": true,
+    "entry_address": "0x14023cd10",
+    "chrome_gui_validated": false,
+    "root_static_missing": {
+      "chrome.exe": 0,
+      "chrome_elf.dll": 0
+    },
+    "broader_chrome_dll_inventory": {
+      "source": "build/windows/chrome-longjump-compiled-graph.json",
+      "static_missing_unique_contracts": 242,
+      "delayed_missing_unique_contracts": 748,
+      "nodes": 12,
+      "edges": 2625,
+      "parse_errors": 0,
+      "caveat": "Census of compiled resolver, broader scope including chrome.dll. Root chrome.exe/chrome_elf static imports bind; chrome.dll entry and GUI are not reached. Counts reflect this explicit provider/search graph, not conformance."
+    },
+    "current_frontier": {
+      "component": "chrome.dll static dependency/import binding",
+      "ksw": "KyIl Subsystem for Windows; KSL exclusively Linux",
+      "causal_boundary": "Protected versioned OPEN succeeds -> relocated GuardLongJumpTargetTable validates 92 executable RVAs -> static imports show absent WINMM/Kernel32 contracts -> absent ws2_32.dll dependency -> LoadLibraryExW error126 -> Chrome exit7",
+      "guard_longjump": {
+        "accepted": 92,
+        "flags": "0x10500",
+        "stride": 4,
+        "table_rva": "0x115a532c",
+        "independent_unaligned_targets": 87,
+        "enforcement": "Read-only validated private catalog, separate GFIDS; actual guarded restore/unwind and invalid-neighbor termination tested"
+      },
+      "first_logged_missing_import": "WINMM.dll!midiInAddBuffer",
+      "dependency_absence": {
+        "first_by_ordered_descriptors_and_available_providers": "ws2_32.dll",
+        "other_unavailable_static_dependencies": [
+          "crypt32.dll",
+          "dwrite.dll"
+        ],
+        "caveat": "Dependency name inferred from actual descriptor order/provider absence and loader code; raw final error itself reports only absent selected-search dependency."
+      },
+      "visible_missing_import_diagnostic_limit": 128,
+      "last_error": 126,
+      "chrome_exit": 7,
+      "chrome_dll_entry_reached": false,
+      "chrome_gui": false,
+      "decision_document": "docs/windows-guard-longjump-2026-10-18.md",
+      "independent_limits": [
+        "Complete 4-vCPU runner fails: native write-rate quarantine kills concurrent registry producers on RAM FS fallback. Security unchanged; failure retained, not waived.",
+        "Nonimage/JIT longjmp policy not implemented; targets denied",
+        "UNWIND_CONSOLIDATE, unsupported unwind dispositions and arbitrary native/fiber stacks remain unsupported",
+        "Actual Chrome catalog load demonstrated; Chrome itself has not executed a longjmp in the observed startup",
+        "No chrome.dll initialization or Chrome GUI"
+      ]
+    },
+    "validated": {
+      "checkpoint": "2026-10-18-ksw-guard-longjump",
+      "report": "docs/windows-guard-longjump-2026-10-18.md",
+      "host": {
+        "source": "build/windows/longjump-host.log",
+        "complete_reference_suite_exit": 0,
+        "parser_checks": 52,
+        "actual_windows_positive": true,
+        "actual_windows_negative_restore_status": "0xc0000409",
+        "actual_windows_negative_unwind_status": "0xc0000409",
+        "import_graph_unit_tests": 6
+      },
+      "vm": {
+        "1": {
+          "source": "build/windows/longjump-final-1-cpu-20261018-101512.log",
+          "runner_source": "build/windows/longjump-final-1-cpu-20261018-101512.log",
+          "longjump_positive": true,
+          "longjump_negative_restore": true,
+          "longjump_negative_unwind": true,
+          "complete_runner_pass": true,
+          "census_rows_resolved": 710,
+          "census_absent": 0,
+          "chrome_longjump_targets_accepted": 92,
+          "chrome_exe_entries": 2,
+          "chrome_dll_entry_reached": false,
+          "chrome_gui": false,
+          "chrome_final_exit": 7,
+          "panic_observed": false,
+          "clean_shutdown_requested": true,
+          "vm_cleanly_shutdown": true
+        },
+        "4": {
+          "source": "build/windows/longjump-diagnostic-4-cpu-20261018-102137.log",
+          "runner_source": "build/windows/longjump-final-4-cpu-20261018-101744.log",
+          "longjump_positive": true,
+          "longjump_negative_restore": true,
+          "longjump_negative_unwind": true,
+          "complete_runner_pass": false,
+          "census_rows_resolved": 710,
+          "census_absent": 0,
+          "chrome_longjump_targets_accepted": 92,
+          "chrome_exe_entries": 2,
+          "chrome_dll_entry_reached": false,
+          "chrome_gui": false,
+          "chrome_final_exit": 7,
+          "panic_observed": false,
+          "clean_shutdown_requested": true,
+          "runner_failure": "registry: concurrent producer completion FAIL",
+          "diagnosed_wait": 0,
+          "diagnosed_child_exit": 137,
+          "security_enforcement": "mrac-quarantine -> mrac-shadow-write -> mrac-kill on alternating hive snapshots",
+          "test_volume": "unrecognized VexFS, RAM fallback",
+          "vm_cleanly_shutdown": true
+        }
+      },
+      "limitations": [
+        "Complete 4-vCPU runner fails: native write-rate quarantine kills concurrent registry producers on RAM FS fallback. Security unchanged; failure retained, not waived.",
+        "Nonimage/JIT longjmp policy not implemented; targets denied",
+        "UNWIND_CONSOLIDATE, unsupported unwind dispositions and arbitrary native/fiber stacks remain unsupported",
+        "Actual Chrome catalog load demonstrated; Chrome itself has not executed a longjmp in the observed startup",
+        "No chrome.dll initialization or Chrome GUI"
+      ],
+      "diagnostic_registry_fixture": "userspace/windows/tests/registry_smoke.c",
+      "security_audit_screenshot": "build/windows/longjump-security-audit.png",
+      "iso": {
+        "path": "build/kyilos-windows-process.iso",
+        "bytes": 2115201024,
+        "sha256": "C5A2F2C2B55E258033D6AD3ED989E2D5A6DE0D3E0A9548B529F1FECC8299206A",
+        "kernel_sha256": "696A888C967C0CF7DC1999424117829F8FFF2D6FFF999B3D96D0F9B19C962383",
+        "kernel_unchanged": true,
+        "note": "Final ISO differs from first 1-vCPU full-run ISO only by registry-fixture diagnostic; KSW runtime/kernel identical."
+      },
+      "vm_final_state": "poweroff"
+    },
+    "iso": {
+      "path": "build/kyilos-windows-process.iso",
+      "bytes": 2115201024,
+      "sha256": "C5A2F2C2B55E258033D6AD3ED989E2D5A6DE0D3E0A9548B529F1FECC8299206A",
+      "kernel_sha256": "696A888C967C0CF7DC1999424117829F8FFF2D6FFF999B3D96D0F9B19C962383",
+      "kernel_unchanged": true,
+      "note": "Final ISO differs from first 1-vCPU full-run ISO only by registry-fixture diagnostic; KSW runtime/kernel identical."
+    },
+    "previous_frontier": {
+      "component": "chrome_elf / Crashpad",
+      "operation": "CreateNamedPipeW",
+      "return": "INVALID_HANDLE_VALUE",
+      "last_error": 50,
+      "access": "0x80003",
+      "mode": "0x6",
+      "instances": 2,
+      "output_buffer": 512,
+      "input_buffer": 512,
+      "timeout": 0,
+      "security_attributes_size": 24,
+      "inherit": true,
+      "descriptor": "non-null merged current-user DACL plus mandatory-label SACL",
+      "fatal": "crashpad_client_win.cc:330; chrome_elf.dll+0x1ff162",
+      "missing_contracts": [
+        "native-enforced per-client admission corresponding to the requested descriptor",
+        "named-pipe provider handle inheritance"
+      ],
+      "architecture_decision": "native generic identity-conditioned admission versus isolated userspace authority broker; pending user choice",
+      "state": "implemented; real Chrome protected/inheritable pipe succeeds in final 1/4-vCPU traces"
+    },
+    "prior_checkpoint_frontier": {
+      "component": "Chrome / Crashpad startup after successful Ultra-Space pipe creation",
+      "observed_failures": [
+        {
+          "operation": "InitializeCriticalSectionEx",
+          "source": "critical_section_with_debug_info.cc:35",
+          "last_error": 50
+        },
+        {
+          "operation": "OpenProcess",
+          "source": "crashpad_client_win.cc:430",
+          "last_error": 50
+        },
+        {
+          "operation": "delayed load SHELL32.dll!CommandLineToArgvW",
+          "library_error": 126
+        }
+      ],
+      "causal_boundary": "protected CreateNamedPipeW succeeds; crash server startup fails and reports self-termination at crashpad_client_win.cc:144",
+      "remaining_instrumentation": "Capture requested critical-section flags and OpenProcess rights before extending semantics; missing Shell32 delayed contract is separately identified."
+    },
+    "report": "docs/windows-message-windows-tokens-2026-10-18.md",
+    "prior_shared_events_frontier": {
+      "component": "Chrome parent USER32 and actual Crashpad child database initialization",
+      "create_process": "succeeds; second actual chrome.exe entry observed in 1 and 4 vCPU",
+      "observed_failures": [
+        {
+          "operation": "delayed load USER32.dll!FindWindowExW",
+          "library_error": 126,
+          "caller": "0x14023c1c5",
+          "state": "USER32 provider absent; not replaced by an empty lookup stub"
+        },
+        {
+          "operation": "Crashpad CreateDirectoryW",
+          "path": "C:\\Users\\root\\Temp\\Google\\Chrome\\User Data\\Crashpad",
+          "last_error": 3,
+          "state": "parent directory missing; no recursive mkdir or Chrome-specific precreation added"
+        },
+        {
+          "operation": "TransactNamedPipe",
+          "last_error": 109,
+          "state": "peer exits after database initialization failure; not evidence that capability transfer/spawn failed"
+        }
+      ],
+      "causal_boundary": "protected pipe, real shared inherited events and CreateProcess progress into actual child PE entry; child cannot initialize database; parent delayed USER32 call is independently unsupported",
+      "remaining_instrumentation": "Determine requested profile-folder/environment contract and directory-creation sequence; implement a real generic userspace USER32 window contract rather than claiming no window exists."
+    },
+    "validated_current": {
+      "iso": "build/kyilos-windows-process.iso",
+      "iso_size": 2115141632,
+      "iso_sha256": "D827E2B00589B220442A96CFD2DF517A1080E60D5C53DECF9F475214569C185B",
+      "kernel_sha256": "696A888C967C0CF7DC1999424117829F8FFF2D6FFF999B3D96D0F9B19C962383",
+      "host": "build/windows/native-file-protection-host-rerun.log",
+      "host_reference_pass": true,
+      "host_initial_iocp_failure": "build/windows/native-file-protection-host.log; unchanged printed diagnostic and full rerun passed; intermittent condition not diagnosed",
+      "pe_graph_tests_passed": 6,
+      "cpus": {
+        "1": {
+          "source": "build/windows/native-file-protection-archive-1-cpu-1-cpu-20261018-094434.log",
+          "native_protection": true,
+          "fs_roots": true,
+          "win32_protected_file": true,
+          "complete_runner": true,
+          "compiled_census": true,
+          "chrome_exe_entries": 2,
+          "actual_protected_open_native_fd": 14,
+          "versioned_dll_load_attempt": true,
+          "chrome_dll_entry_reached": false,
+          "chrome_gui": false,
+          "kernel_panic_observed": false,
+          "vm_cleanly_shutdown": true
+        },
+        "4": {
+          "source": "build/windows/native-file-protection-archive-4-cpu-4-cpu-20261018-093602.log",
+          "native_protection": true,
+          "fs_roots": true,
+          "win32_protected_file": true,
+          "complete_runner": true,
+          "compiled_census": true,
+          "chrome_exe_entries": 2,
+          "actual_protected_open_native_fd": 14,
+          "versioned_dll_load_attempt": true,
+          "chrome_dll_entry_reached": false,
+          "chrome_gui": false,
+          "kernel_panic_observed": false,
+          "vm_cleanly_shutdown": true
+        }
+      },
+      "vm_final_state": "poweroff",
+      "limits": [
+        "No live elevated administrator fixture; override source-audited",
+        "No forced OOM or real cross-UID campaign",
+        "No Chrome DLL entry or Chrome GUI",
+        "Harness shutdown sent too early during child execution; manual native shell shutdown completed on both final boots; no forced poweroff"
+      ]
+    },
+    "previous_frontier_before_native_protection": {
+      "component": "Chrome versioned chrome.dll readability probe and file-use sharing authority",
+      "create_process": "succeeds; two actual chrome.exe entries observed in each final 1/4-vCPU boot",
+      "observed_failures": [
+        {
+          "operation": "CreateFileW",
+          "path": "A:\\155.0.8059.84\\chrome.dll",
+          "access": "0x80000000",
+          "share": 3,
+          "disposition": 3,
+          "attributes": 0,
+          "caller": "0x14003de22",
+          "last_error": 50,
+          "state": "adapter rejects share != 7 before native open; no native-enforced file-use sharing lease"
+        },
+        {
+          "operation": "LoadLibraryExW",
+          "path": "A:\\chrome.dll",
+          "flags": 8,
+          "last_error": 126,
+          "state": "Chrome chose absent development fallback after real versioned readability probe failed; LOAD_WITH_ALTERED_SEARCH_PATH is now implemented and independently tested"
+        },
+        {
+          "operation": "Crashpad CreateDirectoryW",
+          "path": "C:\\Users\\root\\AppData\\Local\\Google\\Chrome\\User Data\\Crashpad",
+          "last_error": 3,
+          "state": "LOCALAPPDATA now projects a real directory; application-specific parent tree remains absent; no recursive CreateDirectory or Chrome-specific mkdir added"
+        },
+        {
+          "operation": "Crashpad session notification CreateWindow",
+          "last_error": 50,
+          "state": "requires a non-message-only window; explicit refusal, not a fake window"
+        },
+        {
+          "operation": "OpenProcessToken",
+          "access": "0xa0008",
+          "last_error": 50,
+          "state": "symbol exists; broad rights remain refused; basic native-subject query/duplicate is real and tested. Chrome continues after this failure."
+        }
+      ],
+      "causal_boundary": "Real versioned DLL exists -> share=3 readability open refused -> ModuleCanBeRead false -> absent unversioned fallback -> error126 and exit7. Independent Crashpad child still exits after profile/window failures; peer error109 is secondary.",
+      "architecture_decision": "Pending: generic native file-use leases with explicitly delegated capability rights, versus exclusive userspace file mediation with direct root authority removed.",
+      "decision_document": "docs/windows-file-sharing-decision.md"
+    },
+    "previous_frontier_before_guard_longjump": {
+      "component": "chrome.dll Load Configuration / guarded long-jump targets",
+      "ksw": "KyIl Subsystem for Windows; KSL exclusively Linux",
+      "file_open": "GENERIC_READ/share=3/OPEN_EXISTING succeeds via native protected OPEN orchestrated by Ultra-Space",
+      "causal_boundary": "Versioned protected open returns FD14 -> actual versioned LoadLibraryExW(flags=8) -> wr_load_config rejects nonzero GuardLongJumpTargetTable at 0xb0 (92 targets) -> error126 -> Chrome exit7",
+      "observed_failures": [
+        {
+          "operation": "LoadLibraryExW",
+          "path": "A:\\155.0.8059.84\\chrome.dll",
+          "flags": 8,
+          "last_error": 126,
+          "reason": "unsupported load-config extension",
+          "rejected_field": "GuardLongJumpTargetTable",
+          "offset": "0xb0",
+          "target_count": 92,
+          "guard_flags": "0x10500",
+          "source": "userspace/windows/load_config.c:73"
+        }
+      ],
+      "architecture_decision": "Resolved: native canonical-name protection; Ultra-Space orchestrates; native FS enforces. No complete Windows leases or extra native Chrome privilege.",
+      "semantic_difference": "Ephemeral canonical-name pin with FS_ADMIN override; native authorized writes remain allowed; EACCES maps to Win32 error5, not error32; no symmetric share admission/delete-pending. Deny-read/write modes stay unsupported.",
+      "independent_limits": [
+        "READ|EXECUTE/share=1 probe remains unsupported; actual versioned DLL load proceeds",
+        "Crashpad parent directories and visible session notification windows remain incomplete",
+        "Broad token rights 0xa0008 unsupported",
+        "242 static/748 delayed unique contracts still missing in broader DLL inventory"
+      ],
+      "decision_document": "docs/windows-native-file-protection-2026-10-18.md",
+      "raw_load_config": "build/windows/chrome-native-protection-load-config.json"
+    },
+    "previous_validated_before_guard_longjump": {
+      "host_reference": "build/windows/chrome-startup-events-host-unsandboxed.log",
+      "host_protected_pipe": "build/windows/ultra-protected-host.log",
+      "vm1": {
+        "source": "build/windows/chrome-inherited-streams-1-cpu-20261018-002846.log",
+        "complete_runner": true,
+        "census": true,
+        "protected_pipe": true,
+        "ultra_space": true,
+        "shared_event": true,
+        "startup_contract": true,
+        "handle_value_retirement": true,
+        "chrome_pipe_success": true,
+        "actual_child_chrome_entry": true,
+        "chrome_gui": false
+      },
+      "vm4": {
+        "source": "build/windows/chrome-inherited-streams-4-cpu-20261018-002041.log",
+        "complete_runner": true,
+        "census": true,
+        "protected_pipe": true,
+        "ultra_space": true,
+        "shared_event": true,
+        "startup_contract": true,
+        "handle_value_retirement": true,
+        "chrome_pipe_success": true,
+        "actual_child_chrome_entry": true,
+        "chrome_gui": false
+      },
+      "benchmarks": "build/windows/ultra-final-bench.json",
+      "limits": "No Chrome GUI, USER32/GDI, physical Dell rerun, full graphics regression campaign, remote-process VM access, exhaustive event-service OOM injection or Windows conformance.",
+      "host_parser_comparisons": 60000,
+      "pe_graph_tests": 6,
+      "vm4_harness_incident": "Core inspection temporarily interrupted keyboard delivery after completed runner/census; command was retried manually from a clean prompt. Raw log retains the failed partial command. The harness now fails immediately on keyboard delivery errors."
+    }
+  }
 }

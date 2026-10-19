@@ -4,10 +4,11 @@ No success stubs: each export imports a specifically implemented userspace
 KyIlOS Windows function. Source registration is validated by the VM census.
 Original guest PEs are not rewritten/converted. There is no kernel Win32 ABI.
 """
-import importlib.util,pathlib,struct
+import importlib.util,pathlib,struct,json
 root=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('pegraph',root/'scripts/audit-pe-graph.py')
 g=importlib.util.module_from_spec(spec);spec.loader.exec_module(g)
+ordinal_catalog=json.loads((root/'userspace/windows/provider_ordinals.json').read_text())
 def align(n,a):return (n+a-1)&-a
 def dll(module,names,base):
     text=bytearray();data=bytearray();exports=bytearray()
@@ -18,10 +19,19 @@ def dll(module,names,base):
     # caller's Microsoft x64 registers/shadow space via a tail jump.
     exports.extend(b'\0'*40);module_name=put(exports,module.encode()+b'\0')
     symbol_rvas=[0x1000+i*16 for i in range(len(names))]
-    funcs=put(exports,struct.pack('<'+'I'*len(names),*symbol_rvas),4)
-    name_table=put(exports,b'\0'*(4*len(names)),4);ord_table=put(exports,struct.pack('<'+'H'*len(names),*range(len(names))),2)
+    stable={name:int(n) for n,name in ordinal_catalog.get(module,{}).items()}
+    if module in ordinal_catalog and not set(names)<=stable.keys():
+        raise ValueError(f'{module}: an implemented export lacks a verified ordinal: {set(names)-stable.keys()}')
+    next_ordinal=max(stable.values(),default=0)+1;assigned=[]
+    for name in names:
+        if name in stable:assigned.append(stable[name])
+        else:assigned.append(next_ordinal);next_ordinal+=1
+    functions=[0]*max(assigned)
+    for number,rva in zip(assigned,symbol_rvas):functions[number-1]=rva
+    funcs=put(exports,struct.pack('<'+'I'*len(functions),*functions),4)
+    name_table=put(exports,b'\0'*(4*len(names)),4);ord_table=put(exports,struct.pack('<'+'H'*len(names),*(n-1 for n in assigned)),2)
     for i,name in enumerate(names):struct.pack_into('<I',exports,name_table+i*4,eb+put(exports,name.encode()+b'\0'))
-    struct.pack_into('<IIHHIIIIIII',exports,0,0,0,0,0,eb+module_name,1,len(names),len(names),eb+funcs,eb+name_table,eb+ord_table)
+    struct.pack_into('<IIHHIIIIIII',exports,0,0,0,0,0,eb+module_name,1,len(functions),len(names),eb+funcs,eb+name_table,eb+ord_table)
     db=eb+align(len(exports),4096)
     # Import every binding through the private, native userspace provider.
     data.extend(b'\0'*40);provider=put(data,b'kyilwin-provider.dll\0')
@@ -57,7 +67,7 @@ def dll(module,names,base):
     return header+body
 directory=root/'usr/lib/kyil-windows';directory.mkdir(parents=True,exist_ok=True)
 for i,(module,bindings) in enumerate(sorted(g.registered(root).items())):
-    names=sorted(bindings);image=dll(module,names,0x180000000+i*0x100000)
+    names=sorted(n for n in bindings if not n.startswith('#'));image=dll(module,names,0x180000000+i*0x100000)
     path=directory/module;path.write_bytes(image)
     parsed=g.PE(path)
     assert set(names)<=set(parsed.exports())

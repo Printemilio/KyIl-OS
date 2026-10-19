@@ -198,9 +198,12 @@ let parse_hex_color value =
       Some (r, g, b, a)
     with _ -> None
 
+(* A bare name is a token of the system palette (Os_theme): 'color: text'
+   follows the dark or light theme the person chose. *)
 let color_from_literal = function
   | GuiColor hex -> parse_hex_color hex
   | GuiString s when String.length s > 0 && s.[0] = '#' -> parse_hex_color s
+  | GuiIdent name -> Option.bind (Os_theme.lookup name) parse_hex_color
   | _ -> None
 
 (* Durations accept a bare number too, so 'interval: 100' keeps meaning 100

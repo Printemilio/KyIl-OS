@@ -103,6 +103,7 @@ static unsigned WR_WIN RegDeleteKeyW(void *key,const uint16_t *name){unsigned sa
 }
 void *wr_advapi_exports(const char *name){
     void *data=wr_security_data_exports(name);if(data)return data;
+    data=wr_token_exports(name);if(data)return data;
 #define E(f) if(wr_equal(name,#f,0))return (void *)&f
     E(RegOpenKeyExW);E(RegOpenCurrentUser);E(RegCloseKey);E(RegCreateKeyExW);E(RegSetValueExW);E(RegQueryValueExW);E(RegDeleteValueW);E(RegDeleteKeyW);
 #undef E

@@ -96,6 +96,12 @@ unmonitored 129th FD. OOM paths release partially created sessions and objects.
 
 ## Deliberate current limits
 
+KSW's `resource-service` additionally orchestrates readonly protected opens
+using explicitly delegated READ|TRANSFER filesystem roots. Native FS namespace
+protection, not the service or a Windows lease table, enforces deletion/rename
+denial. Returned file capabilities retain this protection independently of the
+service's lifetime. See `windows-native-file-protection-2026-10-18.md`.
+
 - ASCII local pipe names; no remote pipe transport.
 - Synchronous byte/message I/O; named-pipe OVERLAPPED is refused explicitly.
 - One write is bounded by the native message payload (65524 data bytes).

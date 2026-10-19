@@ -42,6 +42,7 @@ int wr_process_self_access(void *h,unsigned access){
     wr_lock(&gate);int i=index(h),fd=-1;unsigned mask=0;
     if(i>=0 && handles[i].kind==1){mask=handles[i].access;fd=(int)(int64_t)vex_syscall1(VEX_SYS_DUP,handles[i].fd);}
     wr_unlock(&gate);if(fd<0){wr_current_teb()->last_error=6;return 0;}
+    if(access==0x1000 && (mask&0x400))mask|=0x1000;
     if((mask&access)!=access){close_fd(fd);wr_current_teb()->last_error=50;return 0;}
     vex_process_resource_info_t info;vex_process_resource_req_t q={.operation=VEX_PROCESS_QUERY,.fd=fd,.out=&info};int e=native(&q);close_fd(fd);
     if(e || info.pid!=wr_current_teb()->pid){wr_current_teb()->last_error=e?failure(e):50;return 0;}return 1;
@@ -65,6 +66,7 @@ int wr_process_adopt(const wr_inherited_file *r) {
     handles[i].fd=r->fd;handles[i].kind=r->access;handles[i].flags=r->flags;handles[i].access=r->overlapped;handles[i].generation=wr_handle_generation(value);return 0;
 }
 static int export_handle(void *h,wr_inherited_file *out,int child_slot,int require_inherit) {
+    if(wr_handle_tag((uintptr_t)h)==0x67)return -95; /* socket inheritance needs provider state transfer */
     if(wr_handle_tag((uintptr_t)h)==0x59)return wr_object_export(h,out,child_slot);
     if(wr_handle_tag((uintptr_t)h)==0x57) {
         unsigned flags;if(require_inherit && (!wr_file_flags(h,0,0,&flags) || !(flags&1)))return -1;
@@ -181,7 +183,7 @@ static int WR_WIN CreateProcessW(const uint16_t *app,uint16_t *command,void *pro
     if(thread_security){security_attributes *a=thread_security;if(a->size!=sizeof(*a) || a->descriptor){wr_current_teb()->last_error=50;return 0;}thread_flags=a->inherit!=0;}
     /* FORCEOFFFEEDBACK is honored: native launch has no Windows startup
        feedback cursor. Preserve it in the child's real STARTUPINFO. */
-    if((flags&~0xc0004u) || (startup->flags&~0x180u) || startup->reserved || startup->desktop || startup->title || startup->reserved_bytes || startup->reserved2) {
+    if((flags&~0x80404u) || (startup->flags&~0x180u) || startup->reserved || startup->desktop || startup->title || startup->reserved_bytes || startup->reserved2) {
         wr_trace_contract("CreateProcessW guard: flags startup extras site",flags,startup->flags,
             !!startup->reserved|((uintptr_t)!!startup->desktop<<1)|((uintptr_t)!!startup->title<<2)|((uintptr_t)!!startup->reserved_bytes<<3)|((uintptr_t)!!startup->reserved2<<4),(uintptr_t)__builtin_return_address(0));
         wr_current_teb()->last_error=50;return 0;
@@ -201,7 +203,7 @@ static int WR_WIN CreateProcessW(const uint16_t *app,uint16_t *command,void *pro
     b->command_length=length+1;memcpy(b->command,cmd,(length+1)*2);b->image_length=wlen(b->image,512)+1;
     directory=wr_cwd_resource(cwd,b->cwd,512);if(directory<0){why=directory==-20?267:failure(directory);goto fail;}
     b->cwd_length=wlen(b->cwd,512)+1;b->reserved=1;
-    if((why=environment(env,(flags&0x40000u)!=0,b)))goto fail;
+    if((why=environment(env,(flags&0x400u)!=0,b)))goto fail;
     unsigned count=0,selected_only=0;
     if(flags&0x80000u) {
         attribute_list *list=*(attribute_list **)((uint8_t *)startup+sizeof(*startup));wr_lock(&attribute_gate);
@@ -217,12 +219,15 @@ static int WR_WIN CreateProcessW(const uint16_t *app,uint16_t *command,void *pro
                     if(!wr_pipe_flags((void *)selected[i],0,0,&handle_flags) || !(handle_flags&1) || wr_pipe_export((void *)selected[i],b->files,&count)){why=50;for(unsigned j=start;j<count;j++)temporary[j]=b->files[j].fd;break;}
                     for(unsigned j=start;j<count;j++){temporary[j]=b->files[j].fd;b->files[j].fd=16+(int)j;}continue;}
                 int fd=export_handle((void *)selected[i],&b->files[count],16+(int)count,1);
-                if(fd<0){wr_trace_contract("CreateProcessW grant: index handle type site",i,(uintptr_t)selected[i],wr_handle_tag((uintptr_t)selected[i]),(uintptr_t)__builtin_return_address(0));why=6;break;}temporary[count++]=fd;
+                if(fd<0){wr_trace_contract("CreateProcessW grant: index handle type site",i,(uintptr_t)selected[i],wr_handle_tag((uintptr_t)selected[i]),(uintptr_t)__builtin_return_address(0));why=fd==-95?50:6;break;}temporary[count++]=fd;
             }
         }
         wr_unlock(&attribute_gate);b->file_count=count;if(why)goto fail;
     }
     if(!selected_only && inherit) {
+        /* Never claim all handles inherited while silently dropping Winsock
+           objects. An explicit handle list excluding them remains valid. */
+        if(wr_winsock_handle_count()){why=50;goto fail;}
         if(wr_files_inherit(b->files,&count,16)){why=50;b->file_count=count;for(unsigned i=0;i<count;i++)temporary[i]=b->files[i].fd;goto fail;}
         if(wr_objects_inherit(b->files,&count)){why=50;b->file_count=count;for(unsigned i=0;i<count;i++)temporary[i]=b->files[i].fd;goto fail;}
         if(wr_pipes_inherit(b->files,&count)){why=50;b->file_count=count;for(unsigned i=0;i<count;i++)temporary[i]=b->files[i].fd;goto fail;}
@@ -336,7 +341,7 @@ static int WR_WIN GetProcessHandleCount(void *process,unsigned *out){
        excluding references retained after a public handle has been closed.
        Concurrent opens/closes may naturally change the sampled total. */
     unsigned count=wr_thread_handle_count()+wr_object_handle_count()+wr_file_handle_count()+wr_pipe_handle_count()+
-        wr_completion_handle_count()+wr_mapping_handle_count()+wr_registry_handle_count()+wr_job_handle_count()+wr_wer_handle_count();
+        wr_completion_handle_count()+wr_mapping_handle_count()+wr_registry_handle_count()+wr_job_handle_count()+wr_wer_handle_count()+wr_token_handle_count()+wr_winsock_handle_count();
     wr_lock(&gate);for(unsigned i=0;i<256;i++)if(handles[i].kind)count++;wr_unlock(&gate);
     if(wr_memory_copy(out,&count,4)){wr_current_teb()->last_error=998;return 0;}return 1;
 }
@@ -379,14 +384,14 @@ static int WR_WIN GetExitCodeProcess(void *h,unsigned *code){if(!code){wr_curren
 static int WR_WIN TerminateProcess(void *h,unsigned status){if(h==(void *)-1)wr_exit(status);int fd=acquire(h,1,0);vex_process_resource_req_t r={.operation=VEX_PROCESS_TERMINATE,.fd=fd,.status=(int)status};int e=fd<0?fd:native(&r);close_fd(fd);if(e)wr_current_teb()->last_error=failure(e);return !e;}
 static void WR_WIN GetStartupInfoW(wr_startup *out){if(wr_boot)*out=wr_boot->startup;else{memset(out,0,sizeof(*out));out->size=sizeof(*out);out->input=wr_file_stdio(0);out->output=wr_file_stdio(1);out->error=wr_file_stdio(2);}}
 static int WR_WIN GetHandleInformation(void *h,unsigned *flags) {
-    if(!flags){wr_current_teb()->last_error=87;return 0;}int job=wr_job_flags(h,0,0,flags);if(job>=0)return job;
+    if(!flags){wr_current_teb()->last_error=87;return 0;}int token=wr_token_flags(h,0,0,flags);if(token>=0)return token;int job=wr_job_flags(h,0,0,flags);if(job>=0)return job;
     int object=wr_object_flags(h,0,0,flags);if(object>=0)return object;
     int pipe=wr_pipe_flags(h,0,0,flags);if(pipe>=0)return pipe;
     int file=wr_file_flags(h,0,0,flags);if(file>=0)return file;
     wr_lock(&gate);int i=index(h);if(i>=0)*flags=handles[i].flags;wr_unlock(&gate);if(i<0)wr_current_teb()->last_error=6;return i>=0;
 }
 static int WR_WIN SetHandleInformation(void *h,unsigned mask,unsigned flags) {
-    if(mask&~3u){wr_current_teb()->last_error=87;return 0;}int job=wr_job_flags(h,mask,flags,0);if(job>=0)return job;
+    if(mask&~3u){wr_current_teb()->last_error=87;return 0;}int token=wr_token_flags(h,mask,flags,0);if(token>=0)return token;int job=wr_job_flags(h,mask,flags,0);if(job>=0)return job;
     int object=wr_object_flags(h,mask,flags,0);if(object>=0)return object;
     int pipe=wr_pipe_flags(h,mask,flags,0);if(pipe>=0)return pipe;
     int file=wr_file_flags(h,mask,flags,0);if(file>=0)return file;
@@ -398,7 +403,8 @@ static int WR_WIN DuplicateHandle(void *source_process,void *h,void *target_proc
     (void)access; /* DUPLICATE_SAME_ACCESS explicitly ignores desired access. */
     if(source_process!=(void *)-1 || target_process!=(void *)-1 || options&~3u || !(options&2)){wr_current_teb()->last_error=50;return 0;}
     wr_current_teb()->last_error=0;
-    if(wr_handle_tag((uintptr_t)h)==0x5d)*out=wr_job_duplicate(h,inherit);
+    if(wr_handle_tag((uintptr_t)h)==0x62)*out=wr_token_duplicate(h,inherit);
+    else if(wr_handle_tag((uintptr_t)h)==0x5d)*out=wr_job_duplicate(h,inherit);
     else if(wr_handle_tag((uintptr_t)h)==0x59)*out=wr_object_duplicate(h,inherit);
     else if(wr_handle_tag((uintptr_t)h)==0x55)*out=wr_pipe_duplicate(h,inherit);
     else if(wr_handle_tag((uintptr_t)h)==0x57)*out=wr_file_duplicate(h,inherit);

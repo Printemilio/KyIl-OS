@@ -2,6 +2,16 @@ import importlib.util,pathlib,tempfile,unittest,struct,shutil
 root=pathlib.Path(__file__).resolve().parents[1]
 s=importlib.util.spec_from_file_location('graph',root/'scripts/audit-pe-graph.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
 class GraphTests(unittest.TestCase):
+    def test_winsock_stable_ordinals_and_empty_slots(self):
+        p=m.PE(root/'usr/lib/kyil-windows/ws2_32.dll')
+        try:
+            exports=p.exports();self.assertEqual(exports['#115'],exports['WSAStartup'])
+            self.assertEqual(exports['#23'],exports['socket'])
+            self.assertEqual(exports['#194'],exports['inet_ntop'])
+            self.assertEqual(exports['#50'],exports['WSACreateEvent'])
+            self.assertNotIn('#22',exports) # shutdown has no native implementation
+            self.assertGreater(exports['#23']['rva'],0)
+        finally:p.close()
     def test_real_process_static_imports(self):
         p=m.PE(root/'usr/pe-tests/windows-process-parent.exe')
         try:
@@ -27,6 +37,10 @@ class GraphTests(unittest.TestCase):
         self.assertNotIn('NtCreateKey',exports['kernel32.dll'])
         self.assertIn('CommandLineToArgvW',exports['shell32.dll'])
         self.assertNotIn('CommandLineToArgvW',exports['kernel32.dll'])
+        self.assertIn('FindWindowExW',exports['user32.dll'])
+        self.assertNotIn('FindWindowExW',exports['kernel32.dll'])
+        self.assertIn('OpenProcessToken',exports['advapi32.dll'])
+        self.assertNotIn('OpenProcessToken',exports['kernel32.dll'])
     def test_supplied_pe_exports_are_not_called_missing(self):
         fixture=root/'usr/pe-tests/windows-tls-smoke.exe'
         graph=m.audit([str(fixture)],[str(root/'usr/pe-tests')],root,{},100)
