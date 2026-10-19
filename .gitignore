@@ -39,3 +39,7 @@ Thumbs.db
 .claude/
 .codex/
 .agents/
+
+# Local Python scripts (already tracked tools remain versioned)
+*.py
+*.pyw
